@@ -1,0 +1,13 @@
+# Software for the SpatialExperiment export (bin/tp_export_spe.R).
+name: tileparity-r
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - r-base>=4.4
+  - bioconductor-spatialexperiment>=1.16
+  - bioconductor-singlecellexperiment
+  - bioconductor-rhdf5
+  - r-matrix
+  - r-jsonlite
+  - procps-ng

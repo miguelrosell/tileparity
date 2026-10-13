@@ -1,0 +1,23 @@
+# Software for Processes 1, 1b, 2b, 3 and the AnnData export.
+# Used both by the Docker image (containers/python/Dockerfile) and by -profile conda.
+# Versions are the ones the test suite was run with.
+name: tileparity-python
+channels:
+  - conda-forge
+dependencies:
+  - python=3.13
+  - pip
+  - procps-ng
+  - pip:
+      - numpy==2.5.4
+      - scipy==1.18.1
+      - scikit-image==0.26.0
+      - pandas==3.0.6
+      - pyarrow==26.0.0
+      - h5py==3.16.0
+      - anndata==0.13.4
+      - pillow==12.3.0
+      - pyvips==3.2.0
+      - pyvips-binary==8.18.7
+      - fastlbp==0.3.4
+      - psutil==7.2.2

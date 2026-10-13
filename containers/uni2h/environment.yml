@@ -1,0 +1,21 @@
+# Software for Processes 1a + 2a (UNI2-h) and the weights download.
+# Tested with this exact stack (torch 2.7.1+cu126). torch from PyPI bundles CUDA 12.6 libraries: it needs an NVIDIA driver >= 525
+# on the host (RTX 3070, L4 and other Ampere/Ada GPUs are supported). Without a GPU it
+# runs on CPU.
+name: tileparity-uni2h
+channels:
+  - conda-forge
+dependencies:
+  - python=3.13
+  - pip
+  - procps-ng
+  - pip:
+      - torch==2.7.1
+      - torchvision==0.22.1
+      - timm==1.0.30
+      - huggingface_hub==2.2.0
+      - numpy==2.5.4
+      - pandas==3.0.6
+      - h5py==3.16.0
+      - pyvips==3.2.0
+      - pyvips-binary==8.18.7

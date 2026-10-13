@@ -1,0 +1,8 @@
+work/
+results*/
+.nextflow*
+*.pyc
+__pycache__/
+.pytest_cache/
+.hf_home/
+*.egg-info/

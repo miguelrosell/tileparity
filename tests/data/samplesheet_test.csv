@@ -1,0 +1,4 @@
+sample,image,spatial,spatial_format,tiling,mpp,patient,condition,cohort
+test_hd,he_synthetic.tif,hd_test/outs,spaceranger_hd,,,P1,CRC,A
+test_visium,he_synthetic.tif,visium_test/outs,spaceranger,,0.25,P2,CRC,B
+test_image_only,he_synthetic.tif,,,,,P3,none,C

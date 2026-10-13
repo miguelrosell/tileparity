@@ -1,0 +1,11 @@
+sample	kind	url
+A_P1_CRC	image	TODO: microscope image (.btf/.tif) link from the 10x page of P1 CRC
+A_P1_CRC	binned_outputs	TODO: "Binned outputs" (.tar.gz) link
+A_P2_CRC	image	TODO
+A_P2_CRC	binned_outputs	TODO
+A_P5_CRC	image	TODO
+A_P5_CRC	binned_outputs	TODO
+A_P3_NAT	image	TODO
+A_P3_NAT	binned_outputs	TODO
+A_P5_NAT	image	TODO
+A_P5_NAT	binned_outputs	TODO

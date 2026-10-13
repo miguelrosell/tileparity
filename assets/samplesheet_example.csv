@@ -1,0 +1,4 @@
+sample,image,spatial,spatial_format,tiling,mpp,patient,condition,cohort
+A_P1_CRC,/data/raw/A_P1_CRC/Visium_HD_Human_Colon_Cancer_P1_tissue_image.btf,/data/raw/A_P1_CRC/binned_outputs,spaceranger_hd,grid,,P1,CRC,A
+A_P3_NAT,/data/raw/A_P3_NAT/Visium_HD_Human_Colon_Normal_P3_tissue_image.btf,/data/raw/A_P3_NAT/binned_outputs,spaceranger_hd,grid,,P3,NAT,A
+ZEN36,/data/hest/wsis/ZEN36.tif,/data/hest/st/ZEN36.h5ad,hest,spot,0.4598,Patient 7,Cancer,B
