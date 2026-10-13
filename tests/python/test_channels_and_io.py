@@ -70,3 +70,24 @@ def test_hd_pixel_size_from_scalefactors():
     mpp, source = spatial.mpp_from_scalefactors(sp)
     assert mpp == pytest.approx(0.25) and source == "scalefactors:microns_per_pixel"
     assert json.loads(sp.scalefactors.read_text())["bin_size_um"] == 8.0
+
+
+def test_visium_spot_diameter_follows_the_65um_convention():
+    # Space Ranger documents spot_diameter_fullres as a theoretical 65 µm spot, not 55 µm
+    sp = spatial.resolve(TEST_DATA / "visium_test/outs", "spaceranger")
+    mpp, source = spatial.mpp_from_scalefactors(sp)
+    assert mpp == pytest.approx(0.25) and "65um" in source
+
+
+@pytest.mark.parametrize("fmt,path", [("spaceranger_hd", "hd_test/outs"), ("spaceranger", "visium_test/outs")])
+def test_pixel_size_from_unit_spacing(fmt, path):
+    sp = spatial.resolve(TEST_DATA / path, fmt)
+    pos = spatial.read_positions(sp)
+    assert spatial.mpp_from_pitch(pos, spatial.unit_pitch_um(sp)) == pytest.approx(0.25, rel=1e-3)
+    # large inputs are reduced to a window around the array centre: same answer
+    assert spatial.mpp_from_pitch(pos, spatial.unit_pitch_um(sp), max_units=50) == pytest.approx(0.25, rel=1e-3)
+
+
+def test_hest_spacing_is_not_assumed():
+    sp = spatial.resolve(TEST_DATA / "hest_test.h5ad", "hest")
+    assert spatial.unit_pitch_um(sp) is None

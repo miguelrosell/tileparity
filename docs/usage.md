@@ -25,7 +25,11 @@ ZEN36,hest/wsis/ZEN36.tif,hest/st/ZEN36.h5ad,hest,spot,0.4598,Patient 7,Cancer,B
 * For `spaceranger_hd`, `spatial` may be `outs/`, `outs/binned_outputs/` or a `square_008um/` folder; the bin size is chosen with `--hd_bin_um`.
 * For `spaceranger` (standard Visium), `spatial` is the `outs/` folder.
 * Image-only samples: leave `spatial` and `spatial_format` empty (grid tiling, no counts).
-* Extra columns are copied into every tile of that sample.
+* `tiling` can be left empty (`auto`): `grid` for Visium HD and image-only samples, `spot` for Visium and HEST.
+* `mpp` can be left empty when Space Ranger's files or the image metadata give the pixel size; if it is given and disagrees with them, the run stops (see [design.md](design.md#pixel-size)).
+* Extra columns (e.g. `patient`, `condition`) are copied into every tile of that sample; they must not reuse a tile-table column name such as `row`, `col` or `keep`.
+
+Common questions about inputs, spots and bins are answered in [faq.md](faq.md).
 
 ## 4. Run
 
@@ -49,4 +53,4 @@ Create `conf/<site>.config` modelled on `conf/uzh_rolandgarros.config` (executor
 
 ## Resources (orientation)
 
-Per sample at 0.5 µm/px (≈3 000–4 000 tissue tiles for a 6.5 mm Visium HD capture area), LBP takes roughly 2 CPU-seconds per tile and channel with the default 13 radii, i.e. a few minutes on 64 cores or about an hour on 8; the 0.2857 µm/px scale has about three times more tiles. UNI2-h needs about 0.35 TFLOP per tile (ViT-H/14, 681 M parameters), i.e. in fp16 roughly a hundred tiles per second on an NVIDIA L4 and a few tens on a laptop RTX 3070 (estimates). The resampled image is written to the work directory (about 3 GB per sample at 0.5 µm/px, uncompressed equivalent).
+Per sample at 0.5 µm/px (at most ≈3 400 tiles of 112 µm for a 6.5 × 6.5 mm Visium HD capture area), LBP takes roughly 2 CPU-seconds per tile and channel with the default 13 radii, i.e. a few minutes on 64 cores or about an hour on 8; the 0.2857 µm/px scale has about three times more tiles. UNI2-h needs about 0.35 TFLOP per tile (ViT-H/14, 681 M parameters), i.e. in fp16 roughly a hundred tiles per second on an NVIDIA L4 and a few tens on a laptop RTX 3070 (estimates). The resampled image is written to the work directory (about 3 GB per sample at 0.5 µm/px, uncompressed equivalent).

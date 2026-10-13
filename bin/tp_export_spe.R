@@ -146,8 +146,9 @@ build_spe <- function(dir, prefix) {
     )
     if (nrow(spe) > 0) rowData(spe)$gene_name <- cnt$gene_names
     thumb <- f(".thumbnail.png")
-    if (file.exists(thumb) && !is.null(prep$thumbnail$scale_to_fullres)) {
-        spe <- addImg(spe, imageSource = thumb, scaleFactor = as.numeric(prep$thumbnail$scale_to_fullres),
+    # scaleFactor converts spatialCoords (full-resolution px) to thumbnail px
+    if (file.exists(thumb) && !is.null(prep$thumbnail$fullres_to_thumbnail)) {
+        spe <- addImg(spe, imageSource = thumb, scaleFactor = as.numeric(prep$thumbnail$fullres_to_thumbnail),
                       sample_id = sample, image_id = "thumbnail", load = TRUE)
     }
     metadata(spe)$tileparity <- provenance
@@ -176,7 +177,8 @@ combine_spe <- function(spes) {
     cols <- Reduce(union, lapply(spes, function(s) colnames(colData(s))))
     spes <- lapply(spes, function(s) {
         reducedDims(s) <- reducedDims(s)[dims]
-        for (cname in setdiff(cols, colnames(colData(s)))) colData(s)[[cname]] <- NA_character_
+        # logical NA combines with columns of any type (text metadata, numbers) in cbind
+        for (cname in setdiff(cols, colnames(colData(s)))) colData(s)[[cname]] <- rep(NA, ncol(s))
         colData(s) <- colData(s)[, cols]
         rowData(s) <- NULL  # gene symbols may differ between annotations; restored below
         metadata(s) <- list()

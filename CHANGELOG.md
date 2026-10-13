@@ -10,3 +10,4 @@ First version.
 * Process 3 (`TILEPARITY_AGGREGATEST`): Y = X·A aggregation for Visium HD bins, Visium spots and HEST h5ad.
 * Process 4: SpatialExperiment (R) and AnnData exports per sample and combined per scale.
 * Profiles: docker, apptainer, singularity, conda, mamba, wave, gpu, slurm, test, laptop, uzh_rolandgarros.
+* Input checks: pixel size cross-checked between the samplesheet, Space Ranger's scale factors, the spacing of the spots/bins and the image metadata; in-tissue units must lie inside the image; samplesheet and parameter validation before any task starts.

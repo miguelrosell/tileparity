@@ -21,7 +21,12 @@ Input1 --[1 PREPARE]--> Output1 = Input2 (resampled image, tile table, unit->til
 | 3 | `TILEPARITY_AGGREGATEST` | Expression per tile, Y = X·A: the sum of the Visium HD bins inside each tile (or the Visium spot of a spot-centred tile). |
 | 4 | `TILEPARITY_EXPORTSPE`, `TILEPARITY_EXPORTANNDATA` | One object per sample and one combined object per scale. |
 
-The reasoning behind every default is in [docs/design.md](docs/design.md).
+Documentation:
+
+* [docs/usage.md](docs/usage.md) — installation, data download, samplesheet, running on a laptop or a cluster;
+* [docs/output.md](docs/output.md) — every output file and object;
+* [docs/design.md](docs/design.md) — the reasoning behind every default;
+* [docs/faq.md](docs/faq.md) — short answers: input requirements, what each extractor receives, spots and bins, parameters.
 
 ## Quick start
 
@@ -39,7 +44,7 @@ nextflow run miguelrosell/tileparity -profile laptop,docker,gpu \
     --uni2h_weights ~/models/uni2h/pytorch_model.bin
 ```
 
-The container images are built from [`containers/`](containers) by GitHub Actions and published as `ghcr.io/miguelrosell/tileparity-{python,uni2h,r}`. To build them locally instead: `bash containers/build_local.sh`.
+The container images are built from [`containers/`](containers) by GitHub Actions and published as `ghcr.io/miguelrosell/tileparity-{python,uni2h,r}`. To build them locally instead: `bash containers/build_local.sh`. Without containers, `-profile conda` creates the same software environments from `containers/*/environment.yml`.
 
 ## Running on the UZH server (SLURM)
 
@@ -109,7 +114,13 @@ A new extractor is one module that reads `[meta, resampled.tif, tiles.tsv.gz]` a
 
 ## Status and roadmap
 
-Version 0.1.0. Tested here: the Python library (33 unit tests, including LBP histograms identical to fastLBP's whole-image run) and the whole workflow on the synthetic test data without containers. The container images, the SpatialExperiment export and the GPU path are exercised by the GitHub Actions workflows (`Containers` builds the images and runs the test profile in Docker).
+Version 0.1.0. What has been run so far:
+
+* the Python library: 39 unit tests, including LBP histograms identical to fastLBP's whole-image run;
+* the whole workflow on the synthetic test data without containers, including both exports (AnnData; SpatialExperiment with R 4.3 / SpatialExperiment 1.12);
+* GitHub Actions: `CI` runs the unit tests and a stub run on every push; `Containers` builds the three images and runs the test profile inside them in Docker.
+
+The GPU path (CUDA) has not been run yet; the first real run on a GPU machine will be its test. Neither has a full-size slide: the first Visium HD sample will show the real run times.
 
 Not yet implemented:
 

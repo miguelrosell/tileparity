@@ -133,10 +133,13 @@ def main() -> None:
                  np.array(barcodes)[sel], gene_ids, gene_names)
 
     # ---- standard Visium-like spots ----------------------------------------------------------
+    # Visium geometry: hexagonal lattice with 100 µm between neighbouring spot centres; along a
+    # row array_col advances by 2 per spot and odd rows are shifted by half a spot (+1).
+    row_um = 100.0 * np.sqrt(3) / 2
     spots = []
-    for i, y in enumerate([80.0, 80.0 + 86.6, 80.0 + 2 * 86.6]):
+    for i, y in enumerate([80.0, 80.0 + row_um, 80.0 + 2 * row_um]):
         for x in ([120.0, 220.0, 320.0] if i % 2 == 0 else [170.0, 270.0, 370.0]):
-            spots.append((x, y, i, len(spots)))
+            spots.append((x, y, i, int(round((x - 120.0) / 50.0))))
     sx = np.array([s[0] for s in spots]); sy = np.array([s[1] for s in spots])
     s_tissue, s_epi, _ = tissue_masks(sx, sy)
     s_barcodes = [f"AAAC{i:04d}GGTT-1" for i in range(len(spots))]
@@ -146,8 +149,9 @@ def main() -> None:
     vis = HERE / "visium_test" / "outs"
     (vis / "spatial").mkdir(parents=True, exist_ok=True)
     spos.to_csv(vis / "spatial" / "tissue_positions.csv", index=False)
+    # Space Ranger's spot_diameter_fullres is the diameter of a theoretical 65 µm spot in pixels
     (vis / "spatial" / "scalefactors_json.json").write_text(json.dumps(
-        {"spot_diameter_fullres": 55.0 / MPP, "fiducial_diameter_fullres": 65.0 / MPP,
+        {"spot_diameter_fullres": 65.0 / MPP, "fiducial_diameter_fullres": 100.0 / MPP,
          "tissue_hires_scalef": 0.5, "tissue_lowres_scalef": 0.1}, indent=2))
     X_spots = expression(s_epi[s_tissue], 40.0)
     write_10x_h5(vis / "filtered_feature_bc_matrix.h5", X_spots, np.array(s_barcodes)[s_tissue], gene_ids, gene_names)

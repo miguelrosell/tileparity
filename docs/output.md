@@ -6,11 +6,11 @@
 
 | file | content |
 |---|---|
-| `<id>.tiles.tsv.gz` | one row per candidate tile (any tissue): `tile_id`, `unit_type` (grid/spot), `row`, `col`, `barcode` (spot tiles), `x0_px`, `y0_px` (top-left corner in the resampled image), centre in resampled px (`cx_px`, `cy_px`), full-resolution px (`cx_fullres`, `cy_fullres`) and µm (`cx_um`, `cy_um`), `tissue_fraction`, `st_coverage`, `n_st_units`, QC metrics (`lapvar`, `pen_fraction`, `dark_fraction`) and flags, `keep`, `qc_fail` (reasons), sample metadata |
+| `<id>.tiles.tsv.gz` | one row per candidate tile (any tissue): `tile_id`, `unit_type` (grid/spot), `row`, `col`, `barcode` (spot tiles), `x0_px`, `y0_px` (top-left corner in the resampled image), centre in resampled px (`cx_px`, `cy_px`), full-resolution px (`cx_fullres`, `cy_fullres`) and µm (`cx_um`, `cy_um`), `tissue_fraction` (share of the tile under the tissue mask), `st_coverage` (Visium HD: share of the tile covered by bins of the capture area), `n_st_units` (in-tissue bins summed for the tile; 1 for a spot tile), QC metrics (`lapvar`, `pen_fraction`, `dark_fraction`) and flags, `keep`, `qc_fail` (reasons a tile was dropped), sample metadata |
 | `<id>.assignment.tsv.gz` | `barcode` → `tile_id` for every in-tissue Visium HD bin / Visium spot that falls in a candidate tile |
 | `<id>.thumbnail.png`, `<id>.mask.png` | thumbnail at `--mask_mpp` and the tissue mask |
 | `<id>.overlay.png` | thumbnail with spatial units (blue tint) and tiles (green kept, red dropped) |
-| `<id>.prepare.json` | pixel-size sources and the value used, scale factor, image sizes, mask threshold, tile counts and drop reasons, all parameters; `"status": "skipped"` when a scale would need upsampling |
+| `<id>.prepare.json` | every pixel-size candidate and the value used (`native`), scale factor, image sizes, thumbnail scale factors (`fullres_to_thumbnail`), mask threshold, spatial-unit checks, tile counts and drop reasons, all parameters; `"status": "skipped"` when a scale would need upsampling |
 
 ## `<sample>/mpp<scale>/uni2h/` — Output2a
 

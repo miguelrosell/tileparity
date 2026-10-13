@@ -95,7 +95,7 @@ def to_anndata(s: dict):
             sample: {
                 "images": {"lowres": s["thumbnail"]},
                 "scalefactors": {
-                    "tissue_lowres_scalef": float(prep["thumbnail"]["scale_to_fullres"]),
+                    "tissue_lowres_scalef": float(prep["thumbnail"]["fullres_to_thumbnail"]),
                     "spot_diameter_fullres": float(prep["tile_px"] / prep["scale_factor"]),
                 },
             }

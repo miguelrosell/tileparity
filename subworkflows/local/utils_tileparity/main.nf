@@ -10,6 +10,7 @@ workflow PIPELINE_INITIALISATION {
     if (!input) {
         error "Missing --input: a samplesheet CSV is required (see docs/usage.md)."
     }
+    validateParams()
     def sheet = file(input, checkIfExists: true)
     def samples = readSamplesheet(sheet)
     def scaleList = parseScales(scales)
@@ -28,6 +29,40 @@ workflow PIPELINE_INITIALISATION {
 
 def scaleTag(Double mpp) {
     return String.format(Locale.ROOT, '%.4f', mpp)
+}
+
+// Checks that are cheap here and expensive to discover inside a task
+def validateParams() {
+    if (!params.skip_uni2h && (params.tile_px as int) != 224) {
+        error "--tile_px ${params.tile_px}: UNI2-h works on 224 x 224 px tiles. Keep --tile_px 224 or add --skip_uni2h."
+    }
+    if (!((params.hd_bin_um as int) in [2, 8, 16])) {
+        error "--hd_bin_um ${params.hd_bin_um}: Space Ranger writes bins of 2, 8 or 16 µm"
+    }
+    def channels = params.lbp_channels.toString().tokenize(',')*.trim().findAll { it }
+    if (!params.skip_lbp && (!channels || (channels - ['H', 'E', 'grey']))) {
+        error "--lbp_channels '${params.lbp_channels}': use a comma-separated subset of H,E,grey"
+    }
+    if (!((params.min_tissue as Double) >= 0 && (params.min_tissue as Double) <= 1)) {
+        error "--min_tissue must be between 0 and 1"
+    }
+    if (!(params.uni2h_precision in ['fp32', 'fp16', 'bf16'])) {
+        error "--uni2h_precision must be fp32, fp16 or bf16"
+    }
+    if (params.skip_uni2h && params.skip_lbp) {
+        log.warn "--skip_uni2h and --skip_lbp are both set: only tiles and expression per tile will be produced"
+    }
+    if (params.uni2h_test_mode && !params.skip_uni2h) {
+        log.warn "UNI2-h TEST MODE: embeddings come from a random 1-block network and are meaningless"
+    }
+}
+
+// Columns of the tile table; samplesheet metadata columns must not reuse these names
+def reservedColumns() {
+    return ['tile_id', 'sample_id', 'scale_mpp', 'tile_px', 'tile_um', 'unit_type', 'row', 'col', 'barcode',
+            'x0_px', 'y0_px', 'cx_px', 'cy_px', 'cx_fullres', 'cy_fullres', 'cx_um', 'cy_um', 'inside_image',
+            'tissue_fraction', 'st_coverage', 'n_st_units', 'lapvar', 'pen_fraction', 'dark_fraction',
+            'blur_flag', 'pen_flag', 'dark_flag', 'keep', 'qc_fail']
 }
 
 def parseScales(String text) {
@@ -55,8 +90,18 @@ def readSamplesheet(sheet) {
     if (missing) {
         error "Samplesheet ${sheet} lacks required column(s): ${missing.join(', ')}"
     }
+    def clash = rows[0].keySet().intersect(reservedColumns())
+    if (clash) {
+        error "Samplesheet ${sheet}: column(s) ${clash.join(', ')} would overwrite columns of the tile table; please rename them"
+    }
     def base = sheet.parent
-    def resolve = { String p -> (p.startsWith('/') || p.contains('://')) ? file(p) : file(base.resolve(p).toString()) }
+    def home = System.getProperty('user.home')
+    def resolve = { String p ->
+        if (p.startsWith('~/')) {
+            return file(home + p.substring(1))
+        }
+        return (p.startsWith('/') || p.contains('://')) ? file(p) : file(base.resolve(p).toString())
+    }
     def seen = [] as Set
     return rows.withIndex().collect { row, i ->
         def line = i + 2
@@ -88,8 +133,8 @@ def readSamplesheet(sheet) {
         if (!(tiling in tilings)) {
             error "Samplesheet line ${line}: tiling must be one of ${tilings.join(', ')}"
         }
-        if (tiling == 'spot' && !row.spatial) {
-            error "Samplesheet line ${line}: tiling 'spot' needs spatial data"
+        if (tiling == 'spot' && !(fmt in ['spaceranger', 'hest'])) {
+            error "Samplesheet line ${line}: tiling 'spot' needs Visium spots (spatial_format spaceranger or hest); Visium HD uses 'grid'"
         }
         Double mpp = null
         if (row.mpp) {
@@ -99,7 +144,10 @@ def readSamplesheet(sheet) {
             mpp = row.mpp as Double
         }
         // every other column is sample metadata, copied into the tile tables and exports
-        def metadata = row.findAll { k, v -> !(k in known) }.collectEntries { k, v -> [(k): (v ?: '').replace("'", '')] }
+        // (single quotes are removed because the values are passed as quoted command-line arguments)
+        def metadata = row.findAll { k, v -> !(k in known) }.collectEntries { k, v ->
+            [(k.replace("'", '')): (v ?: '').replace("'", '')]
+        }
         def meta = [sample: sample, spatial_format: fmt ?: null, tiling: tiling, mpp: mpp, metadata: metadata]
         [meta, image, spatial]
     }

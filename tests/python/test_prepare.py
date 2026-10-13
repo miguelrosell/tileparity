@@ -72,6 +72,23 @@ def test_conflicting_pixel_sizes_are_an_error(tmp_path):
              spatial_format="spaceranger_hd")
 
 
+def test_wrong_samplesheet_mpp_is_caught_by_the_spot_spacing(tmp_path):
+    # standard Visium has no microns_per_pixel; the 100 µm spot spacing reveals the error
+    with pytest.raises(ValueError, match="positions:unit_spacing .* differs from samplesheet"):
+        _run(tmp_path, mpp_target=1.0, mpp_native=0.5, spatial=TEST_DATA / "visium_test/outs",
+             spatial_format="spaceranger")
+
+
+def test_pixel_size_sources_are_reported(tmp_path):
+    rep = _run(tmp_path, mpp_target=1.0, spatial=TEST_DATA / "visium_test/outs", spatial_format="spaceranger")
+    cands = rep["native"]["mpp_candidates"]
+    assert rep["native"]["mpp_source"] == "positions:unit_spacing"
+    assert set(cands) == {"positions:unit_spacing", "image_metadata", "scalefactors:65um/spot_diameter_fullres"}
+    assert all(v == pytest.approx(0.25, rel=1e-3) for v in cands.values())
+    assert rep["spatial"]["fraction_in_tissue_inside_image"] == 1.0
+    assert rep["thumbnail"]["fullres_to_thumbnail"] == pytest.approx(0.25 / 4.0, rel=0.01)
+
+
 def test_wrong_image_is_detected(tmp_path):
     import pyvips
 

@@ -31,8 +31,13 @@ from scipy import sparse
 log = logging.getLogger(__name__)
 
 FORMATS = ("spaceranger_hd", "spaceranger", "hest")
-# Diameter of a standard Visium spot (µm); used only as a last-resort pixel size check.
+# Standard Visium geometry: 55 µm spots, 100 µm apart centre to centre.
 VISIUM_SPOT_DIAMETER_UM = 55.0
+VISIUM_SPOT_PITCH_UM = 100.0
+# Space Ranger's "spot_diameter_fullres" is the diameter, in full-resolution pixels, of a
+# *theoretical 65 µm spot* (10x Genomics, Space Ranger "Spatial outputs" documentation),
+# not of the 55 µm capture spot.
+SR_SPOT_DIAMETER_FULLRES_UM = 65.0
 _SR_COLUMNS = ["barcode", "in_tissue", "array_row", "array_col", "pxl_row_in_fullres", "pxl_col_in_fullres"]
 
 
@@ -179,6 +184,41 @@ def mpp_from_scalefactors(sp: SpatialPaths) -> tuple[float | None, str]:
         if sp.fmt == "spaceranger_hd" and sf.get("bin_size_um"):
             return float(sf["bin_size_um"]) / float(diameter), "scalefactors:bin_size_um/spot_diameter_fullres"
         if sp.fmt == "spaceranger":
-            # Approximate: Space Ranger's spot diameter is meant for plotting.
-            return VISIUM_SPOT_DIAMETER_UM / float(diameter), "scalefactors:55um/spot_diameter_fullres(approx)"
+            return SR_SPOT_DIAMETER_FULLRES_UM / float(diameter), "scalefactors:65um/spot_diameter_fullres"
     return None, "none"
+
+
+def unit_pitch_um(sp: SpatialPaths) -> float | None:
+    """Known centre-to-centre distance (µm) between neighbouring units, or None.
+
+    100 µm for standard Visium spots, one bin size for Visium HD bins. Not used for HEST
+    inputs: HEST-1k also contains older arrays with other spacings."""
+    if sp.fmt == "spaceranger":
+        return VISIUM_SPOT_PITCH_UM
+    if sp.fmt == "spaceranger_hd":
+        return sp.unit_size_um
+    return None
+
+
+def mpp_from_pitch(positions: pd.DataFrame, pitch_um: float, max_units: int = 50000) -> float | None:
+    """Pixel size implied by the spacing of the units in the full-resolution image.
+
+    The median distance from each unit to its nearest neighbour is the known pitch
+    (``pitch_um``) expressed in pixels, so this does not depend on any metadata. Large
+    Visium HD inputs are reduced to the ``max_units`` units nearest to the array centre,
+    which keeps the lattice complete and the cost bounded."""
+    from scipy.spatial import cKDTree
+
+    xy = positions[["x_fullres", "y_fullres"]].to_numpy(float)
+    xy = xy[np.isfinite(xy).all(axis=1)]
+    if len(xy) < 3:
+        return None
+    if len(xy) > max_units:
+        d = np.abs(xy - np.median(xy, axis=0)).max(axis=1)  # square window around the centre
+        xy = xy[d <= np.partition(d, max_units)[max_units]]
+    dist, _ = cKDTree(xy).query(xy, k=2)
+    nn = dist[:, 1]
+    nn = nn[nn > 0]
+    if len(nn) == 0:
+        return None
+    return float(pitch_um) / float(np.median(nn))

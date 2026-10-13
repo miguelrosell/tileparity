@@ -58,35 +58,49 @@ def _choose_tiling(p: PrepareParams) -> str:
     return "spot" if p.spatial_format in ("spaceranger", "hest") else "grid"
 
 
-def _native_mpp(p: PrepareParams, img, sp: spatial.SpatialPaths | None) -> tuple[float, str, dict]:
+# Sources of the native pixel size, in order of priority. The first four describe the
+# pixel grid of the spatial coordinates themselves, so two of them disagreeing stops the
+# run; the image metadata and Space Ranger's plotting diameter only produce a warning.
+MPP_SOURCES = ("samplesheet", "scalefactors:microns_per_pixel", "scalefactors:bin_size_um/spot_diameter_fullres",
+               "positions:unit_spacing", "image_metadata", "scalefactors:65um/spot_diameter_fullres")
+MPP_AUTHORITATIVE = frozenset(MPP_SOURCES[:4])
+
+
+def _native_mpp(p: PrepareParams, img, sp: spatial.SpatialPaths | None,
+                positions: pd.DataFrame | None) -> tuple[float, str, dict]:
     """Pick the native pixel size and cross-check every available source."""
     candidates: dict[str, float] = {}
     if p.mpp_native:
         candidates["samplesheet"] = float(p.mpp_native)
-    sf_mpp, sf_src = (None, "none") if sp is None else spatial.mpp_from_scalefactors(sp)
-    if sf_mpp:
-        candidates[sf_src] = sf_mpp
+    if sp is not None:
+        sf_mpp, sf_src = spatial.mpp_from_scalefactors(sp)
+        if sf_mpp:
+            candidates[sf_src] = sf_mpp
+        pitch = spatial.unit_pitch_um(sp)
+        if pitch and positions is not None:
+            spacing_mpp = spatial.mpp_from_pitch(positions, pitch)
+            if spacing_mpp:
+                candidates["positions:unit_spacing"] = spacing_mpp
     meta_mpp = image.mpp_from_metadata(img)
     if meta_mpp:
         candidates["image_metadata"] = meta_mpp
 
-    order = ["samplesheet", "scalefactors:microns_per_pixel", "image_metadata",
-             "scalefactors:bin_size_um/spot_diameter_fullres", "scalefactors:55um/spot_diameter_fullres(approx)"]
-    chosen = next((k for k in order if k in candidates), None)
+    chosen = next((k for k in MPP_SOURCES if k in candidates), None)
     if chosen is None:
         raise ValueError(
             f"{p.sample_id}: cannot determine the native pixel size. Add an 'mpp' column (µm/px) "
             "to the samplesheet for this sample."
         )
     value = candidates[chosen]
-    authoritative = {"samplesheet", "scalefactors:microns_per_pixel", "scalefactors:bin_size_um/spot_diameter_fullres"}
+    authoritative = MPP_AUTHORITATIVE
     for k, v in candidates.items():
-        if k == chosen or "approx" in k or abs(v - value) / value <= p.mpp_mismatch_tolerance:
+        if k == chosen or abs(v - value) / value <= p.mpp_mismatch_tolerance:
             continue
         msg = (f"{p.sample_id}: pixel size from {k} ({v:.5f} µm/px) differs from {chosen} ({value:.5f} µm/px) "
                f"by more than {100 * p.mpp_mismatch_tolerance:.0f}%")
         if k in authoritative and chosen in authoritative:
-            raise ValueError(msg + ". Check the 'mpp' column of the samplesheet.")
+            raise ValueError(msg + ". Check the 'mpp' column of the samplesheet and that the image is the one "
+                                   "Space Ranger was given.")
         log.warning("%s", msg)
     return value, chosen, candidates
 
@@ -104,11 +118,14 @@ def run(p: PrepareParams) -> dict:
 
     native = image.open_rgb(p.image, access="sequential")  # only streamed through resize
     sp = spatial.resolve(p.spatial, p.spatial_format, p.hd_bin_um) if p.spatial else None
+    positions = spatial.read_positions(sp) if sp is not None else None
+    if positions is not None and len(positions) == 0:
+        raise ValueError(f"{p.sample_id}: no spatial units found in {sp.positions}")
     mode = _choose_tiling(p)
     if mode == "spot" and sp is None:
         raise ValueError(f"{p.sample_id}: tiling 'spot' needs spatial data (Visium positions)")
 
-    mpp_native, mpp_source, mpp_candidates = _native_mpp(p, native, sp)
+    mpp_native, mpp_source, mpp_candidates = _native_mpp(p, native, sp, positions)
     scale = mpp_native / p.mpp_target  # resampled px = native px * scale
     report["native"] = {"width": native.width, "height": native.height, "mpp": mpp_native,
                         "mpp_source": mpp_source, "mpp_candidates": mpp_candidates}
@@ -136,25 +153,35 @@ def run(p: PrepareParams) -> dict:
     thumb = image.to_numpy(thumb_img)[:, :, :3]
     sx, sy = thumb.shape[1] / W, thumb.shape[0] / H  # thumbnail px per resampled px
     tissue, mask_info = mask.tissue_mask(thumb, p.mask)
-    report["thumbnail"] = {"width": thumb.shape[1], "height": thumb.shape[0],
-                           "scale_to_resampled_x": sx, "scale_to_resampled_y": sy,
-                           "scale_to_fullres": thumb.shape[1] / native.width}
+    # multiply a position by these factors to get thumbnail pixels (like Space Ranger's
+    # tissue_lowres_scalef, which converts full-resolution pixels to the low-res image)
+    report["thumbnail"] = {"width": thumb.shape[1], "height": thumb.shape[0], "mpp": p.mask.mask_mpp,
+                           "resampled_to_thumbnail_x": sx, "resampled_to_thumbnail_y": sy,
+                           "fullres_to_thumbnail": thumb.shape[1] / native.width}
     report["mask"] = mask_info
+    if mask_info["tissue_fraction_of_slide"] > 0.9:
+        log.warning("%s: the tissue mask covers %.0f%% of the image. If the image is cropped to the tissue "
+                    "(no glass visible), check %s.mask.png", p.sample_id,
+                    100 * mask_info["tissue_fraction_of_slide"], Path(p.out_prefix).name)
     Image.fromarray(thumb).save(f"{p.out_prefix}.thumbnail.png")
     Image.fromarray((tissue * 255).astype(np.uint8)).save(f"{p.out_prefix}.mask.png")
 
     # ---- 3. candidate tiles -------------------------------------------------------------
     T = p.tile_px
-    positions = spatial.read_positions(sp) if sp is not None else None
     if positions is not None:
         x_t, y_t = positions["x_fullres"].to_numpy() * scale, positions["y_fullres"].to_numpy() * scale
         inside = (x_t >= 0) & (y_t >= 0) & (x_t < W) & (y_t < H)
+        # Space Ranger may place units of the capture area outside a tightly cropped image, but
+        # the units it called in-tissue lie on the tissue, which the image must contain.
+        in_tissue = positions["in_tissue"].to_numpy() == 1
+        inside_tissue = float(inside[in_tissue].mean()) if in_tissue.any() else float(inside.mean())
         report["spatial"] = {"format": sp.fmt, "root": str(sp.root), "unit_size_um": sp.unit_size_um,
-                             "n_units": int(len(positions)), "n_in_tissue": int(positions["in_tissue"].sum()),
-                             "fraction_inside_image": float(inside.mean())}
-        if inside.mean() < 0.99:
+                             "n_units": int(len(positions)), "n_in_tissue": int(in_tissue.sum()),
+                             "fraction_inside_image": float(inside.mean()),
+                             "fraction_in_tissue_inside_image": inside_tissue}
+        if inside_tissue < 0.99:
             raise ValueError(
-                f"{p.sample_id}: only {inside.mean():.1%} of the spatial units fall inside the image. "
+                f"{p.sample_id}: only {inside_tissue:.1%} of the in-tissue spatial units fall inside the image. "
                 "The image is probably not the one Space Ranger used (or the pixel size is wrong)."
             )
 
@@ -251,7 +278,7 @@ def run(p: PrepareParams) -> dict:
         assignment = assignment[assignment["tile_id"].isin(set(tiles["tile_id"]))]
     _write_tsv_gz(assignment, f"{p.out_prefix}.assignment.tsv.gz")
 
-    _overlay(thumb, tiles, positions, scale, sx, sy, sp, p.mpp_target, f"{p.out_prefix}.overlay.png")
+    _overlay(thumb, tiles, positions, scale, sx, sy, sp, p.mpp_target, p.min_tissue, f"{p.out_prefix}.overlay.png")
 
     fail_counts = {c: int(reasons[c].sum()) for c in reasons.columns}
     report["tiles"] = {"n_grid_total": int(n_grid_total) if mode == "grid" else None,
@@ -270,8 +297,9 @@ def run(p: PrepareParams) -> dict:
     return report
 
 
-def _overlay(thumb, tiles, positions, scale, sx, sy, sp, mpp_target, path) -> None:
-    """Thumbnail with spatial units (blue tint) and tiles (green = kept, red = dropped).
+def _overlay(thumb, tiles, positions, scale, sx, sy, sp, mpp_target, min_tissue, path) -> None:
+    """Thumbnail with spatial units (blue tint) and tiles (green = kept, red = dropped
+    although they hold enough tissue).
 
     The blue tint marks where Space Ranger placed the in-tissue units. If it is shifted
     relative to the tissue, the image is not the one Space Ranger was given."""
@@ -297,9 +325,8 @@ def _overlay(thumb, tiles, positions, scale, sx, sy, sp, mpp_target, path) -> No
         canvas[layer] = 0.6 * canvas[layer] + 0.4 * np.array([0, 110, 255], np.float32)
     img = Image.fromarray(np.clip(canvas, 0, 255).astype(np.uint8))
     draw = ImageDraw.Draw(img)
-    eligible = tiles[tiles["tissue_fraction"] >= 0.0]
-    for _, t in eligible.iterrows():
-        if not t["keep"] and t["tissue_fraction"] < 0.5:
+    for _, t in tiles.iterrows():
+        if not t["keep"] and t["tissue_fraction"] < min_tissue:
             continue
         x0, y0 = t["x0_px"] * sx, t["y0_px"] * sy
         x1, y1 = (t["x0_px"] + t["tile_px"]) * sx, (t["y0_px"] + t["tile_px"]) * sy

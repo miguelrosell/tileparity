@@ -27,7 +27,16 @@ LBP radii are fixed in pixels, so their physical size changes with the scale exa
 
 ## Pixel size
 
-The native pixel size is taken, in order of priority, from the samplesheet (`mpp`), Space Ranger's `microns_per_pixel`, the image metadata, or `bin_size_um / spot_diameter_fullres`. Two authoritative sources that disagree by more than 3 % stop the run; a disagreement with the image metadata only warns.
+The native pixel size (µm/px) is taken from the first available source in this order:
+
+1. the samplesheet (`mpp` column);
+2. Space Ranger's `microns_per_pixel` (Visium HD);
+3. Space Ranger's `bin_size_um / spot_diameter_fullres` (Visium HD);
+4. the spacing of the spatial units: the median distance from each unit to its nearest neighbour, in full-resolution pixels, corresponds to 100 µm for Visium spots and to one bin for Visium HD bins;
+5. the image metadata (TIFF resolution tags, OME-XML, Aperio `MPP`);
+6. 65 µm / `spot_diameter_fullres` (standard Visium). Space Ranger documents `spot_diameter_fullres` as the diameter of a *theoretical 65 µm spot*, not of the 55 µm capture spot.
+
+Sources 1–4 describe the pixel grid of the spatial coordinates themselves: if two of them disagree by more than 3 % the run stops (wrong `mpp` in the samplesheet, or an image other than Space Ranger's). A disagreement with sources 5–6 only produces a warning. Every candidate and the chosen value are written to `prepare.json`. The spacing check is not applied to HEST inputs, because HEST-1k also contains older arrays with other spacings; their pixel size comes from the samplesheet (`scripts/hest_download.py` writes HEST's own estimate, derived from the spot spacing).
 
 ## Tissue mask
 
@@ -38,12 +47,12 @@ On a thumbnail at 4 µm/px:
 3. Otsu's threshold: the t maximising the between-class variance w₀·w₁·(μ₀ − μ₁)².
 4. Closing with a 16 µm disk, filling enclosed holes < 20 000 µm² (gland lumens), removing objects < 20 000 µm² (dust).
 
-A tile is kept if at least 50 % of it is tissue. Known limitation: large areas of adipose tissue have low saturation and can be classified as background; raise `--mask_fill_holes_um2` if needed.
+A tile is kept if at least 50 % of it is tissue. Known limitations: large areas of adipose tissue have low saturation and can be classified as background (raise `--mask_fill_holes_um2` if needed); and Otsu's method needs some glass in the image — on an image cropped to the tissue it would split the tissue itself into two classes. Process 1 warns when the mask covers more than 90 % of the image.
 
 ## Tiles
 
 * **Grid** (Visium HD and image-only samples): a lattice anchored at (0, 0) of the resampled image. Image and expression cover exactly the same area. For Visium HD, a tile is also required to be at least 50 % covered by bins (`--min_st_coverage`), so tiles outside the capture area are dropped.
-* **Spot** (standard Visium): a 224 px tile centred on each in-tissue spot (55 µm spot, 100 µm spacing). The image sees the spot plus its surroundings (about 5× the spot's area), the HEST convention. Neighbouring tiles overlap by 12 µm at 0.5 µm/px.
+* **Spot** (standard Visium): a 224 px tile centred on each in-tissue spot (55 µm spots, 100 µm apart), so every spot fits in its tile at all three scales. The tile shows the spot plus its surroundings — 1.7×, 5.3× and 21× the spot's area at 0.2857, 0.5 and 1.0 µm/px (112 µm at 0.5 µm/px is the HEST convention) — while the expression is always that of the central spot. Neighbouring tiles do not overlap at 0.2857 µm/px and overlap partly at 0.5 and 1.0 µm/px. Spots whose tile would extend beyond the image are dropped (`qc_fail = outside_image`).
 * **Cell level** is out of scope for this version: UNI2-h is built for tiles holding tens of cells, LBP histograms on a few hundred pixels are noisy, and per-cell Visium HD counts are sparse. The tile table only stores centre, size and `unit_type`, so a cell mode can be added to Process 1 later without changing the other processes.
 
 ## Quality control
@@ -84,7 +93,7 @@ Y = X · A,  Y[g, t] = Σ_{b ∈ t} X[g, b]
 
 Y[g, t] is the number of molecules of gene g captured over the tile's area — what one spot shaped like the tile would have measured. Summing (not averaging) keeps counts: a sum of Poisson counts is Poisson, so count models and library-size normalisation remain valid, and a tile of ~196 bins is √196 = 14 times more precise than one bin. The number of summed units and the total counts per tile are stored. For spot-centred tiles each tile has exactly its own spot.
 
-Only the image Space Ranger was given has the pixel grid of the unit coordinates. Process 1 stops if fewer than 99 % of the units fall inside the image, and draws the units over the thumbnail (`overlay.png`) for a visual check.
+Only the image Space Ranger was given has the pixel grid of the unit coordinates. Process 1 stops if fewer than 99 % of the in-tissue units fall inside the image (units of the capture area outside the tissue may legitimately lie outside a cropped image), and draws the units over the thumbnail (`overlay.png`) for a visual check.
 
 ## Exports (4)
 

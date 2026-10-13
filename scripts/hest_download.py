@@ -6,7 +6,8 @@
         --samplesheet samplesheet_cohort_b.csv --cohort B
 
 Cohort B of the project (Valdeolivas et al. 2024, 14 sections) is --ids ZEN36 ... ZEN49.
-The pixel size written to the samplesheet comes from HEST's metadata.
+The pixel size written to the samplesheet comes from HEST's metadata
+(pixel_size_um_estimated, i.e. derived from the 100 µm spot spacing).
 """
 
 import argparse
@@ -35,7 +36,9 @@ def main() -> None:
     for i in args.ids:
         meta = json.loads((out / "metadata" / f"{i}.json").read_text())
         image = next((out / "wsis").glob(f"{i}.*"))
-        mpp = meta.get("pixel_size_um_embedded") or meta.get("pixel_size_um_estimated")
+        # HEST estimates the pixel size from the spot spacing in its own image, i.e. in the
+        # pixel grid of the coordinates; the value embedded in the file is the fallback.
+        mpp = meta.get("pixel_size_um_estimated") or meta.get("pixel_size_um_embedded")
         rows.append({
             "sample": i,
             "image": str(image.resolve()),
