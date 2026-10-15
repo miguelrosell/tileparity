@@ -1,8 +1,10 @@
 """Per-tile quality-control metrics.
 
 Metrics are stored as columns of the tile table so that any filter can be changed
-downstream without rerunning the pipeline. Only the blur flag (and the tissue
-fraction) take part in the default ``keep`` decision.
+downstream without rerunning the pipeline. None of them takes part in the default
+``keep`` decision (blurred tiles are dropped only with ``--drop_blurred``): it is
+easier to discard flagged tiles later, e.g. after checking whether they drive a
+clustering, than to recover dropped ones.
 
 * ``lapvar``: variance of the Laplacian of the greyscale tile. The Laplacian is the
   sum of second derivatives and responds to edges; a sharp tile has many edges and a

@@ -57,9 +57,9 @@ A tile is kept if at least 50 % of it is tissue. Known limitations: large areas 
 
 ## Quality control
 
-Stored as columns of the tile table; only blur and tissue fraction enter the default `keep`:
+Stored as columns of the tile table. By default they are only flags: `keep` depends on the tissue fraction (and, for spatial samples, on the presence of expression), so no signal is thrown away before it can be checked, e.g. whether flagged tiles drive a clustering. `--drop_blurred` also removes blur-flagged tiles.
 
-* `lapvar`: variance of the Laplacian of the grey tile. A tile is `blur_flag`ged when log₁₀(lapvar) is more than 3 robust SDs (1.4826 × MAD) below the slide median.
+* `lapvar`: variance of the Laplacian of the grey tile. A tile is `blur_flag`ged when log₁₀(lapvar) is more than 3 robust SDs (1.4826 × MAD) below the slide median. Naturally smooth tissue (mucin, fat) can be flagged too, which is why the flag does not drop tiles by default.
 * `pen_fraction` (green/cyan hue 70–200°, S > 0.25) and `dark_fraction` (V < 0.25): flags only.
 
 ## UNI2-h adapter (1a) and embedding (2a)

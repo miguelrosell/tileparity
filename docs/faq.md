@@ -77,7 +77,7 @@ Take the decisions in this order:
 4. **Branches:** `--skip_uni2h`, `--skip_lbp`, `--skip_spe`, `--skip_anndata`, `--export_combined`.
 5. **UNI2-h weights:** `--uni2h_weights` (recommended) or a download with `HF_TOKEN`.
 6. **Fine-tuning**, rarely needed:
-   * tissue mask and QC: `--min_tissue`, `--mask_*`, `--blur_mad`, `--keep_blurred`;
+   * tissue mask and QC: `--min_tissue`, `--mask_*`, `--blur_mad`, `--drop_blurred`;
    * LBP: `--lbp_channels`, `--lbp_radii`, `--lbp_npoints`, `--lbp_max_radius`, `--he_h_max`, `--he_e_max`;
    * Visium HD: `--hd_bin_um`, `--min_st_coverage`;
    * resources: `--max_cpus`, `--max_memory`, `--max_time`.

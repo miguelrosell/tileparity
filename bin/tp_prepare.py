@@ -40,7 +40,7 @@ def main(argv=None):
                     choices=["nearest", "linear", "cubic", "mitchell", "lanczos2", "lanczos3"])
     ap.add_argument("--compression", default="deflate", choices=["deflate", "lzw", "zstd", "none"])
     ap.add_argument("--blur-mad", type=float, default=3.0)
-    ap.add_argument("--keep-blurred", action="store_true", help="do not drop blur-flagged tiles")
+    ap.add_argument("--drop-blurred", action="store_true", help="drop blur-flagged tiles (default: keep and flag)")
     ap.add_argument("--mask-mpp", type=float, default=4.0)
     ap.add_argument("--mask-smooth-um", type=float, default=8.0)
     ap.add_argument("--mask-min-value", type=float, default=0.10)
@@ -70,7 +70,7 @@ def main(argv=None):
         resample_kernel=args.resample_kernel,
         compression=args.compression,
         blur_mad=args.blur_mad,
-        drop_blurred=not args.keep_blurred,
+        drop_blurred=args.drop_blurred,
         mask=mask.MaskParams(
             mask_mpp=args.mask_mpp,
             smooth_um=args.mask_smooth_um,

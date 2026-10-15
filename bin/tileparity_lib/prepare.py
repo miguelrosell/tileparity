@@ -47,7 +47,7 @@ class PrepareParams:
     resample_kernel: str = "lanczos3"
     compression: str = "deflate"
     blur_mad: float = 3.0
-    drop_blurred: bool = True
+    drop_blurred: bool = False  # blurred tiles are flagged; dropped only on request
     mask: mask.MaskParams = field(default_factory=mask.MaskParams)
     metadata: dict = field(default_factory=dict)
 

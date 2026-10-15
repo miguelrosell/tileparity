@@ -29,6 +29,8 @@
 * `spe/<id>.rds` and `spe/combined_mpp<scale>.rds` — SpatialExperiment: `assay(spe, "counts")`, `colData(spe)` (tile table), `spatialCoords(spe)` (tile centres, full-resolution px), `reducedDims(spe)` (`UNI2H`, `LBP_HE`, `LBP_GREY`, `INTENSITY_HE`), `imgData(spe)` (thumbnail), `metadata(spe)$tileparity` (provenance).
 * `anndata/<id>.h5ad` and `anndata/combined_mpp<scale>.h5ad` — AnnData: `X` (tiles × genes counts), `obs` (tile table), `obsm` (`X_uni2h`, `X_lbp_he`, `X_lbp_grey`, `X_intensity_he`, `spatial`), `uns["spatial"]` (thumbnail and scale factor, compatible with `scanpy.pl.spatial`), `uns["tileparity"]` (column names, provenance).
 
+Both formats hold the same content. To write only one, add `--skip_anndata` or `--skip_spe`; [anndataR](https://bioconductor.org/packages/release/bioc/html/anndataR.html) converts between them (e.g. read an `.h5ad` in R as a SpatialExperiment), which may be the lighter option for large datasets.
+
 ```r
 spe <- readRDS("results/export/mpp0.5000/spe/combined_mpp0.5000.rds")
 uni <- reducedDim(spe, "UNI2H")         # tiles x 1536
