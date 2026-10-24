@@ -15,3 +15,14 @@ If you use tileparity, please cite the tools and data it builds on.
 * **AnnData** — Virshup I. et al. anndata: Access and store annotated data matrices. *JOSS* 9, 4371 (2024).
 * **HEST-1k** — Jaume G. et al. HEST-1k: A dataset for spatial transcriptomics and histology image analysis. *NeurIPS* (2024).
 * **Visium HD colorectal cancer data** — de Oliveira M.F. et al. High-definition spatial transcriptomic profiling of immune cell populations in colorectal cancer. *Nat Genet* (2025). doi:10.1038/s41588-025-02193-3
+
+Methods used by the options added in 0.2.0:
+
+* **Dice overlap** (mask comparison) — Dice L.R. Measures of the amount of ecologic association between species. *Ecology* 26, 297–302 (1945).
+* **Optical-density background threshold** (`--mask_method od`, reference value) — Macenko M. et al. A method for normalizing histology slides for quantitative analysis. *IEEE ISBI*, 1107–1110 (2009).
+* **Count splitting** (the multinomial split of Visium spots follows the same principle) — Neufeld A., Gao L.L., Popp J., Battle A., Witten D. Inference after latent variable estimation for single-cell RNA sequencing data. arXiv:2207.00554 (2022); *Biostatistics* (2024).
+* **Hellinger transform** (LBP analysis recipe) — Legendre P., Gallagher E.D. Ecologically meaningful transformations for ordination of species data. *Oecologia* 129, 271–280 (2001).
+* **Multiple factor analysis** (equal weight per LBP block) — Escofier B., Pagès J. Multiple factor analysis (AFMULT package). *Comput Stat Data Anal* 18, 121–140 (1994).
+* **UMAP** (`--qc_umap`) — McInnes L., Healy J., Melville J. UMAP: Uniform Manifold Approximation and Projection for dimension reduction. arXiv:1802.03426 (2018).
+* **scikit-learn** (PCA for `--qc_umap`) — Pedregosa F. et al. Scikit-learn: machine learning in Python. *JMLR* 12, 2825–2830 (2011).
+* **Plotly** (interactive QC page) — Plotly Technologies Inc. Collaborative data science. Montréal (2015). https://plot.ly

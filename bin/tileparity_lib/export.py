@@ -1,7 +1,9 @@
 """Process 4 (Python side) - collect Output1, Output2a, Output2b and Output3 per sample.
 
 Files are matched by their common prefix ``<sample>_mpp<scale>``. The R script
-``tp_export_spe.R`` builds the SpatialExperiment from exactly the same files.
+``tp_export_spe.R`` builds the SpatialExperiment from exactly the same files. The
+objects hold the *extracted* tiles; the ``keep`` column marks those that pass every QC
+threshold (identical sets with the default ``--min_tissue_extract``).
 """
 
 from __future__ import annotations
@@ -15,24 +17,41 @@ import pandas as pd
 from PIL import Image
 from scipy import sparse
 
-from . import __version__, features, st
+from . import __version__, features, lineage, st
 from .tiling import read_tiles
 
 log = logging.getLogger(__name__)
 
-# feature block in lbp.h5 / uni2h.h5  ->  name in the exported objects
-LBP_COMBINED = {"LBP_HE": ("LBP_H", "LBP_E"), "LBP_GREY": ("LBP_GREY",), "INTENSITY_HE": ("INTENSITY_HE",)}
+# blocks in lbp.h5 / uni2h.h5  ->  name in the exported objects (blocks of one channel set
+# are joined; different channel sets stay separate alternatives)
+COMBINED_BLOCKS = {
+    "LBP_HE": ("LBP_H", "LBP_E"),
+    "LBP_GREY": ("LBP_GREY",),
+    "LBP_RGB": ("LBP_R", "LBP_G", "LBP_B"),
+    "LBP_CENTER_HE": ("LBP_CENTER_H", "LBP_CENTER_E"),
+    "LBP_CENTER_GREY": ("LBP_CENTER_GREY",),
+    "LBP_CENTER_RGB": ("LBP_CENTER_R", "LBP_CENTER_G", "LBP_CENTER_B"),
+    "INTENSITY_HE": ("INTENSITY_HE",),
+}
+LINEAGE_STEPS = ("uni2h", "lbp", "st", "prepare")
 
 
 def discover(directory: str | Path) -> list[str]:
     return sorted(p.name[: -len(".tiles.tsv.gz")] for p in Path(directory).glob("*.tiles.tsv.gz"))
 
 
+def lineage_files(directory: str | Path, prefix: str) -> list[Path]:
+    """Lineage files of the leaf steps of a sample (each contains its own ancestors)."""
+    d = Path(directory)
+    found = [d / f"{prefix}.{s}.lineage.json" for s in LINEAGE_STEPS if (d / f"{prefix}.{s}.lineage.json").exists()]
+    leaves = [f for f in found if not f.name.endswith(".prepare.lineage.json")]
+    return leaves or found
+
+
 def load_sample(directory: str | Path, prefix: str) -> dict:
     d = Path(directory)
     tiles = read_tiles(d / f"{prefix}.tiles.tsv.gz")
     tile_ids = tiles["tile_id"].to_numpy(dtype=object)
-    order = pd.Series(np.arange(len(tile_ids)), index=tile_ids)
     prep = json.loads((d / f"{prefix}.prepare.json").read_text())
     blocks: dict[str, tuple[np.ndarray, np.ndarray]] = {}
     provenance: dict = {"prepare": prep}
@@ -41,7 +60,7 @@ def load_sample(directory: str | Path, prefix: str) -> dict:
         ids, blks, attrs = features.read(str(path))
         missing = set(tile_ids) - set(ids)
         if missing:
-            raise ValueError(f"{path.name}: {len(missing)} kept tiles have no {label} features")
+            raise ValueError(f"{path.name}: {len(missing)} extracted tiles have no {label} features")
         idx = pd.Series(np.arange(len(ids)), index=ids).loc[tile_ids].to_numpy()
         provenance[label] = attrs
         return {name: (X[idx], cols) for name, (X, cols, _a) in blks.items()}
@@ -52,7 +71,7 @@ def load_sample(directory: str | Path, prefix: str) -> dict:
     lbp_path = d / f"{prefix}.lbp.h5"
     if lbp_path.exists():
         raw = aligned(lbp_path, "lbp")
-        for out_name, parts in LBP_COMBINED.items():
+        for out_name, parts in COMBINED_BLOCKS.items():
             if all(p in raw for p in parts):
                 blocks[out_name] = (np.hstack([raw[p][0] for p in parts]), np.concatenate([raw[p][1] for p in parts]))
 
@@ -61,15 +80,18 @@ def load_sample(directory: str | Path, prefix: str) -> dict:
         Y, ctiles, gene_ids, gene_names = st.read_counts_h5(str(counts_path))
         idx = pd.Series(np.arange(len(ctiles)), index=ctiles).reindex(tile_ids)
         if idx.isna().any():
-            raise ValueError(f"{counts_path.name}: {int(idx.isna().sum())} kept tiles have no counts")
+            raise ValueError(f"{counts_path.name}: {int(idx.isna().sum())} extracted tiles have no counts")
         Y = sparse.csc_matrix(Y)[:, idx.to_numpy(int)]
     else:
         Y, gene_ids, gene_names = sparse.csc_matrix((0, len(tile_ids)), dtype=np.int64), np.array([]), np.array([])
 
     thumb_path = d / f"{prefix}.thumbnail.png"
     thumb = np.asarray(Image.open(thumb_path).convert("RGB")) if thumb_path.exists() else None
+    parents = lineage_files(d, prefix)
+    merged = lineage.build("sample", "tileparity", prefix, parameters={}, inputs={}, outputs={}, parents=parents)
     return {"prefix": prefix, "tiles": tiles, "blocks": blocks, "counts": Y, "gene_ids": gene_ids,
-            "gene_names": gene_names, "thumbnail": thumb, "provenance": provenance}
+            "gene_names": gene_names, "thumbnail": thumb, "provenance": provenance, "lineage_parents": parents,
+            "lineage": merged}
 
 
 def to_anndata(s: dict):
@@ -78,7 +100,8 @@ def to_anndata(s: dict):
     tiles = s["tiles"].copy()
     tiles.index = tiles["tile_id"].astype(str).to_numpy()
     var = pd.DataFrame({"gene_name": np.asarray(s["gene_names"], dtype=str)}, index=pd.Index(np.asarray(s["gene_ids"], dtype=str)))
-    X = sparse.csr_matrix(s["counts"].T.astype(np.int32))
+    Y = sparse.csr_matrix(s["counts"].T)
+    X = Y.astype(np.int32) if st.is_integer(Y) else Y.astype(np.float32)
     obsm = {f"X_{k.lower()}": np.asarray(v[0], dtype=np.float32) for k, v in s["blocks"].items()}
     obsm["spatial"] = tiles[["cx_fullres", "cy_fullres"]].to_numpy(float)
     prep = s["provenance"]["prepare"]
@@ -88,6 +111,8 @@ def to_anndata(s: dict):
             "version": __version__,
             "columns": {f"X_{k.lower()}": list(map(str, v[1])) for k, v in s["blocks"].items()},
             "provenance": json.dumps(s["provenance"], default=str),
+            "lineage": json.dumps(s["lineage"], default=str),
+            "integer_counts": bool(st.is_integer(Y)),
         }
     }
     if s["thumbnail"] is not None:
@@ -136,4 +161,10 @@ def combine_anndata(adatas: list):
         for k in list(a.obsm.keys()):
             if k not in keys:
                 del a.obsm[k]
-    return ad.concat(adatas, join="inner", merge="same", uns_merge="unique")
+    if len({a.X.dtype for a in adatas}) > 1:  # integer and fractional counts: keep the fractions
+        for a in adatas:
+            a.X = a.X.astype(np.float32)
+    combined = ad.concat(adatas, join="inner", merge="same", uns_merge="unique")
+    combined.uns["tileparity"] = {"version": __version__,
+                                  "samples": sorted(set(combined.obs["sample_id"].astype(str)))}
+    return combined

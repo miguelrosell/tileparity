@@ -1,4 +1,5 @@
-// Process 3 - expression per tile, Y = X A, using the unit -> tile assignment of Process 1.
+// Process 3 - expression per tile, Y = X A, using the unit -> tile assignment of Process 1
+// (Visium spots on the grid are split between the tiles they touch, by area).
 process TILEPARITY_AGGREGATEST {
     tag "${meta.id}"
     label 'process_medium'
@@ -7,16 +8,13 @@ process TILEPARITY_AGGREGATEST {
     container "${params.container_python}"
 
     input:
-    tuple val(meta), path(tiles), path(assignment), path(spatial)
+    tuple val(meta), path(tiles), path(assignment), path(spatial), path(lineage)
 
     output:
-    tuple val(meta), path("${prefix}.counts.h5")         , emit: counts
-    tuple val(meta), path("${prefix}.counts_summary.tsv"), emit: summary
-    tuple val(meta), path("${prefix}.aggregate.json")    , emit: json
-    path "versions.yml"                                   , emit: versions
-
-    when:
-    task.ext.when == null || task.ext.when
+    tuple val(meta), path("${prefix}.counts.h5"), path("${prefix}.st.lineage.json"), emit: counts
+    tuple val(meta), path("${prefix}.counts_summary.tsv")                          , emit: summary
+    tuple val(meta), path("${prefix}.aggregate.json")                              , emit: json
+    path "versions.yml"                                                            , emit: versions
 
     script:
     def args = task.ext.args ?: ''
@@ -27,6 +25,8 @@ process TILEPARITY_AGGREGATEST {
         --tiles ${tiles} \\
         --assignment ${assignment} \\
         --prefix ${prefix} \\
+        --process ${task.process} \\
+        --lineage-parent ${lineage} \\
         ${spatial_args} \\
         ${args}
 
@@ -38,6 +38,7 @@ process TILEPARITY_AGGREGATEST {
     """
     touch ${prefix}.counts.h5 ${prefix}.counts_summary.tsv
     echo '{}' > ${prefix}.aggregate.json
+    echo '{"schema": "tileparity-lineage/1"}' > ${prefix}.st.lineage.json
     echo '"${task.process}": {tileparity: stub}' > versions.yml
     """
 }

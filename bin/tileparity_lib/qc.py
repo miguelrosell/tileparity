@@ -36,13 +36,20 @@ def tile_metrics(rgb: np.ndarray) -> tuple[float, float, float]:
     return lapvar, float(pen.mean()), float(dark.mean())
 
 
-def blur_flags(lapvar: np.ndarray, eligible: np.ndarray, blur_mad: float, min_tiles: int = 10) -> np.ndarray:
-    """Robust low-sharpness outliers among ``eligible`` tiles."""
+def blur_flags(lapvar: np.ndarray, eligible: np.ndarray, blur_mad: float, min_tiles: int = 10,
+               reference: np.ndarray | None = None) -> np.ndarray:
+    """Robust low-sharpness outliers among ``eligible`` tiles.
+
+    The slide's typical sharpness (median and MAD) is taken from ``reference`` tiles
+    (default: the eligible ones). Process 1 uses the tiles that pass the tissue threshold
+    as reference, so that tiles with much glass, which are naturally less sharp, do not
+    shift the reference when features are also extracted for them."""
     flags = np.zeros(len(lapvar), dtype=bool)
-    if blur_mad <= 0 or eligible.sum() < min_tiles:
+    reference = eligible if reference is None else (np.asarray(reference, bool) & eligible)
+    if blur_mad <= 0 or reference.sum() < min_tiles:
         return flags
     logv = np.log10(np.asarray(lapvar, float) + 1e-6)
-    ref = logv[eligible]
+    ref = logv[reference]
     med = np.median(ref)
     mad = 1.4826 * np.median(np.abs(ref - med))
     if mad <= 0:

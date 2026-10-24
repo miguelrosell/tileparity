@@ -10,11 +10,9 @@ process TILEPARITY_EXPORTANNDATA {
     tuple val(meta), path(files)
 
     output:
-    tuple val(meta), path("*.h5ad"), emit: h5ad
-    path "versions.yml"            , emit: versions
-
-    when:
-    task.ext.when == null || task.ext.when
+    tuple val(meta), path("*.h5ad")                 , emit: h5ad
+    tuple val(meta), path("*.anndata.lineage.json") , emit: lineage
+    path "versions.yml"                             , emit: versions
 
     script:
     def args = task.ext.args ?: ''
@@ -23,6 +21,7 @@ process TILEPARITY_EXPORTANNDATA {
     tp_export_anndata.py \\
         --input-dir . \\
         --combined-name ${prefix} \\
+        --process ${task.process} \\
         ${args}
 
     tp_versions.py "${task.process}" anndata > versions.yml
@@ -32,6 +31,7 @@ process TILEPARITY_EXPORTANNDATA {
     prefix = task.ext.prefix ?: "${meta.id}"
     """
     touch ${prefix}.h5ad
+    echo '{"schema": "tileparity-lineage/1"}' > ${prefix}.anndata.lineage.json
     echo '"${task.process}": {tileparity: stub}' > versions.yml
     """
 }

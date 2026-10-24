@@ -10,11 +10,9 @@ process TILEPARITY_EXPORTSPE {
     tuple val(meta), path(files)
 
     output:
-    tuple val(meta), path("*.rds"), emit: rds
-    path "versions.yml"           , emit: versions
-
-    when:
-    task.ext.when == null || task.ext.when
+    tuple val(meta), path("*.rds")              , emit: rds
+    tuple val(meta), path("*.spe.lineage.json") , emit: lineage
+    path "versions.yml"                         , emit: versions
 
     script:
     def args = task.ext.args ?: ''
@@ -23,6 +21,8 @@ process TILEPARITY_EXPORTSPE {
     tp_export_spe.R \\
         --input-dir . \\
         --combined-name ${prefix} \\
+        --process ${task.process} \\
+        --tileparity-version ${workflow.manifest.version} \\
         ${args}
 
     cat <<-END_VERSIONS > versions.yml
@@ -37,6 +37,7 @@ process TILEPARITY_EXPORTSPE {
     prefix = task.ext.prefix ?: "${meta.id}"
     """
     touch ${prefix}.rds
+    echo '{"schema": "tileparity-lineage/1"}' > ${prefix}.spe.lineage.json
     echo '"${task.process}": {tileparity: stub}' > versions.yml
     """
 }

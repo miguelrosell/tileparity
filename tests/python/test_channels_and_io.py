@@ -20,6 +20,25 @@ def test_vips_channels_match_numpy_reference():
     assert (diff == 0).mean() > 0.999
 
 
+def test_vips_rgb_and_grey_bands_match_numpy_reference():
+    rng = np.random.default_rng(2)
+    rgb = rng.integers(0, 256, size=(32, 48, 3), dtype=np.uint8)
+    bands = channels.band_order(["grey", "rgb", "he"])
+    assert bands == ["H", "E", "grey", "R", "G", "B"]
+    vips = channels.rgb_to_channels_vips(pyvips.Image.new_from_array(rgb), 0.30, 0.15, bands).numpy()
+    ref = channels.rgb_to_channels_numpy(rgb, 0.30, 0.15, bands)
+    assert vips.shape == (32, 48, 6)
+    np.testing.assert_array_equal(vips[..., 3:], rgb)
+    assert np.abs(vips.astype(int) - ref.astype(int)).max() <= 1
+
+
+def test_channel_sets_are_validated():
+    assert channels.parse_sets("grey, HE") == ["he", "grey"]
+    assert channels.lbp_channels(["grey"]) == ["grey"] and channels.band_order(["grey"]) == ["H", "E", "grey"]
+    with pytest.raises(ValueError):
+        channels.parse_sets("H,E,grey")
+
+
 def test_channels_follow_skimage_rgb2hed():
     from skimage.color import rgb2hed
 

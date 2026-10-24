@@ -1,5 +1,5 @@
-// Process 1b - LBP adapter: H, E (colour deconvolution) and grey channels, pixel by pixel
-// from the same resampled RGB image that UNI2-h reads.
+// Process 1b - LBP adapter: H and E (colour deconvolution) and, per channel set, grey and
+// R/G/B channels, pixel by pixel from the same resampled RGB image that UNI2-h reads.
 process TILEPARITY_LBPCHANNELS {
     tag "${meta.id}"
     label 'process_low'
@@ -8,15 +8,12 @@ process TILEPARITY_LBPCHANNELS {
     container "${params.container_python}"
 
     input:
-    tuple val(meta), path(image)
+    tuple val(meta), path(image), path(lineage)
 
     output:
-    tuple val(meta), path("${prefix}.channels.tif") , emit: channels
+    tuple val(meta), path("${prefix}.channels.tif"), path("${prefix}.lbpchannels.lineage.json"), emit: channels
     tuple val(meta), path("${prefix}.channels.json"), emit: json
     path "versions.yml"                              , emit: versions
-
-    when:
-    task.ext.when == null || task.ext.when
 
     script:
     def args = task.ext.args ?: ''
@@ -26,6 +23,8 @@ process TILEPARITY_LBPCHANNELS {
     tp_lbp_channels.py \\
         --image ${image} \\
         --prefix ${prefix} \\
+        --process ${task.process} \\
+        --lineage-parent ${lineage} \\
         ${args}
 
     tp_versions.py "${task.process}" pyvips libvips scikit-image > versions.yml
@@ -36,6 +35,7 @@ process TILEPARITY_LBPCHANNELS {
     """
     touch ${prefix}.channels.tif
     echo '{}' > ${prefix}.channels.json
+    echo '{"schema": "tileparity-lineage/1"}' > ${prefix}.lbpchannels.lineage.json
     echo '"${task.process}": {tileparity: stub}' > versions.yml
     """
 }

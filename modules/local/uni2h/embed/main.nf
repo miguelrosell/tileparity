@@ -8,15 +8,12 @@ process UNI2H_EMBED {
     container "${params.container_uni2h}"
 
     input:
-    tuple val(meta), path(image), path(tiles)
+    tuple val(meta), path(image), path(tiles), path(lineage)
     path weights
 
     output:
-    tuple val(meta), path("${prefix}.uni2h.h5"), emit: features
-    path "versions.yml"                         , emit: versions
-
-    when:
-    task.ext.when == null || task.ext.when
+    tuple val(meta), path("${prefix}.uni2h.h5"), path("${prefix}.uni2h.lineage.json"), emit: features
+    path "versions.yml"                                                              , emit: versions
 
     script:
     def args = task.ext.args ?: ''
@@ -31,6 +28,8 @@ process UNI2H_EMBED {
         --tiles ${tiles} \\
         --prefix ${prefix} \\
         --num-workers ${workers} \\
+        --process ${task.process} \\
+        --lineage-parent ${lineage} \\
         ${weights_arg} \\
         ${args}
 
@@ -41,6 +40,7 @@ process UNI2H_EMBED {
     prefix = task.ext.prefix ?: "${meta.id}"
     """
     touch ${prefix}.uni2h.h5
+    echo '{"schema": "tileparity-lineage/1"}' > ${prefix}.uni2h.lineage.json
     echo '"${task.process}": {tileparity: stub}' > versions.yml
     """
 }

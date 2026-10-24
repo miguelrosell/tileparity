@@ -44,7 +44,9 @@ def main() -> None:
             "image": str(image.resolve()),
             "spatial": str((out / "st" / f"{i}.h5ad").resolve()),
             "spatial_format": "hest",
-            "tiling": "spot",
+            # empty = auto: the pipeline's --visium_tiling decides (grid by default since
+            # tileparity 0.2.0); write "spot" here to get spot-centred tiles for a sample
+            "tiling": "",
             "mpp": mpp,
             "patient": meta.get("patient") or "",
             "condition": meta.get("disease_state") or "",

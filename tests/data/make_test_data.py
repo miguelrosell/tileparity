@@ -9,7 +9,10 @@ Creates (next to this script):
 * hd_test/outs/binned_outputs/square_008um/ - Visium HD-like 8 µm bins (Space Ranger layout).
 * visium_test/outs/ - standard Visium-like spots (55 µm, 100 µm hexagonal lattice).
 * hest_test.h5ad - the Visium spots in HEST-1k's h5ad layout.
-* samplesheet_test.csv - a Visium HD sample, a Visium sample and an image-only sample
+* he_synthetic_mask.png - a hand-made style tissue mask (0/255) at 1 µm/px, used as an
+  external mask.
+* samplesheet_test.csv - a Visium HD sample, a Visium sample on the grid, the HEST spots
+  with spot-centred tiles and an image-only sample with the external mask
 
 Everything is deterministic (fixed random seed). Rerun after changing it with:
     python tests/data/make_test_data.py
@@ -166,13 +169,29 @@ def main() -> None:
     adata.obsm["spatial"] = obs[["pxl_col_in_fullres", "pxl_row_in_fullres"]].to_numpy()
     adata.write_h5ad(HERE / "hest_test.h5ad")
 
-    (HERE / "samplesheet_test.csv").write_text(
-        "sample,image,spatial,spatial_format,tiling,mpp,patient,condition,cohort\n"
-        "test_hd,he_synthetic.tif,hd_test/outs,spaceranger_hd,,,P1,CRC,A\n"
-        "test_visium,he_synthetic.tif,visium_test/outs,spaceranger,,0.25,P2,CRC,B\n"
-        "test_image_only,he_synthetic.tif,,,,,P3,none,C\n"
-    )
+    write_mask()
+    write_samplesheet()
     print("test data written to", HERE)
+
+
+def write_mask() -> None:
+    """External tissue mask at 1 µm/px (a quarter of the image's resolution), 0/255."""
+    from PIL import Image
+
+    h, w = H_PX // 4, W_PX // 4
+    yy, xx = np.mgrid[0:h, 0:w]
+    tissue, _, _ = tissue_masks((xx + 0.5) * 4 * MPP, (yy + 0.5) * 4 * MPP)
+    Image.fromarray(tissue.astype(np.uint8) * 255).save(HERE / "he_synthetic_mask.png")
+
+
+def write_samplesheet() -> None:
+    (HERE / "samplesheet_test.csv").write_text(
+        "sample,image,spatial,spatial_format,tiling,mpp,mask,patient,condition,cohort\n"
+        "test_hd,he_synthetic.tif,hd_test/outs,spaceranger_hd,,,,P1,CRC,A\n"
+        "test_visium,he_synthetic.tif,visium_test/outs,spaceranger,,0.25,,P2,CRC,B\n"
+        "test_hest_spot,he_synthetic.tif,hest_test.h5ad,hest,spot,0.25,,P2,CRC,B\n"
+        "test_image_only,he_synthetic.tif,,,,,he_synthetic_mask.png,P3,none,C\n"
+    )
 
 
 if __name__ == "__main__":

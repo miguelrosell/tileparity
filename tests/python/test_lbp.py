@@ -69,5 +69,66 @@ def test_extract_matches_single_tile_computation(tmp_path):
 
 
 def test_default_radii_follow_fastlbp_progression():
-    assert lbp.default_radii(56) == [1, 2, 3, 4, 5, 6, 8, 11, 14, 19, 25, 34, 45]
+    radii = lbp.default_radii(56)
+    assert radii == [1, 2, 3, 4, 5, 6, 8, 11, 14, 19, 25, 34, 45]
     assert [lbp.npoints_for(r) for r in (1, 2, 45)] == [7, 13, 283]
+    # P + 2 codes per radius (0..P ones in a regular pattern, plus one 'irregular' code): 1145 per channel
+    assert sum(lbp.npoints_for(r) + 2 for r in radii) == 1145
+
+
+def test_center_block_is_the_mean_code_vector_of_the_central_pixels():
+    from fastlbp.lbp import uniform_lbp_uint8_padded_absolute
+
+    T = 32
+    img = _texture(3 * T, 3 * T, seed=4)
+    radii = [1, 3]
+    spec = lbp.LbpSpec(radii=radii, npoints=[lbp.npoints_for(r) for r in radii], channels=["H"], tile_px=T)
+    pad = spec.pad
+    crop = img[T - pad : 2 * T + pad, T - pad : 2 * T + pad]
+    hist, center = lbp.tile_histograms(crop, spec, T, T, center=True)
+    np.testing.assert_array_equal(hist, lbp.tile_histograms(crop, spec, T, T))
+    offset = 0
+    for r, p in zip(spec.radii, spec.npoints):
+        m = r + 1
+        sub = np.ascontiguousarray(crop[pad - m : pad + T + m, pad - m : pad + T + m])
+        codes = uniform_lbp_uint8_padded_absolute(sub, p, float(r), T, T, [m, m, m, m])
+        expected = np.bincount(codes[15:17, 15:17].ravel(), minlength=p + 2) / 4.0  # the 2 x 2 central pixels
+        np.testing.assert_allclose(center[offset : offset + p + 2], expected)
+        assert center[offset : offset + p + 2].sum() == pytest.approx(1.0)
+        offset += p + 2
+    assert lbp.center_slice(224) == slice(111, 113) and lbp.center_slice(5) == slice(2, 3)
+
+
+def test_irregular_fractions_read_the_last_bin_of_each_radius():
+    spec = lbp.LbpSpec(radii=[1, 2], npoints=[7, 13], channels=["H"], tile_px=10)
+    hist = np.zeros((1, spec.n_features_per_channel))
+    hist[0, 8] = 25  # radius 1: code P + 1 = 8
+    hist[0, 9 + 14] = 50  # radius 2: code P + 1 = 14, after the 9 bins of radius 1
+    np.testing.assert_allclose(lbp.irregular_fractions(hist, spec), [[0.25, 0.5]])
+
+
+def test_extract_with_channel_sets_and_center(tmp_path):
+    from tileparity_lib import channels
+
+    T = 32
+    rng = np.random.default_rng(7)
+    rgb = rng.integers(0, 256, size=(3 * T, 3 * T, 3), dtype=np.uint8)
+    bands = channels.band_order(["he", "rgb"])
+    assert bands == ["H", "E", "R", "G", "B"]
+    arr = channels.rgb_to_channels_numpy(rgb, 0.3, 0.15, bands)
+    path = tmp_path / "channels.tif"
+    write_tiled_tiff(pyvips.Image.new_from_array(arr).copy(interpretation="multiband"), path, compression="deflate",
+                     tile=64)
+    import pandas as pd
+
+    tiles = pd.DataFrame({"x0_px": [T], "y0_px": [T]})
+    spec = lbp.LbpSpec(radii=[1, 2], npoints=[7, 13], channels=channels.lbp_channels(["he", "rgb"]), tile_px=T,
+                       bands=bands, center=True)
+    out = lbp.extract(str(path), tiles, spec, ncpus=1)
+    assert set(out) == {"H", "E", "R", "G", "B", "center_H", "center_E", "center_R", "center_G", "center_B",
+                        "intensity"}
+    pad = spec.pad
+    crop = arr[T - pad : 2 * T + pad, T - pad : 2 * T + pad]
+    np.testing.assert_array_equal(out["G"][0], lbp.tile_histograms(np.ascontiguousarray(crop[:, :, 3]), spec, T, T))
+    # the R/G/B channels are exactly the RGB values UNI2-h reads
+    np.testing.assert_array_equal(arr[:, :, 2:], rgb)

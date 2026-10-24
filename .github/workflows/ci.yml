@@ -25,8 +25,15 @@ jobs:
       - name: Run unit tests
         run: python -m pytest tests/python -q
 
-  nextflow-stub:
+  nextflow:
+    # Lint and stub run with the oldest supported Nextflow (manifest.nextflowVersion) and
+    # with the latest stable release, which reads scripts and configs with the strict syntax
+    name: nextflow (${{ matrix.nextflow }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        nextflow: ['25.04.0', 'latest-stable']
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-java@v5
@@ -35,7 +42,9 @@ jobs:
           java-version: '17'
       - uses: nf-core/setup-nextflow@v2
         with:
-          version: '25.04.7'
+          version: ${{ matrix.nextflow }}
+      - name: Lint
+        run: nextflow lint .
       - name: Stub run of the test profile
         run: nextflow run . -profile test -stub-run --outdir results_stub
 
@@ -75,7 +84,7 @@ jobs:
       - uses: nf-core/setup-nextflow@v2
         if: steps.images.outputs.available == 'true'
         with:
-          version: '25.04.7'
+          version: 'latest-stable'
       - name: Run the test profile in Docker
         if: steps.images.outputs.available == 'true'
         run: |
@@ -101,7 +110,7 @@ jobs:
           java-version: '17'
       - uses: nf-core/setup-nextflow@v2
         with:
-          version: '25.04.7'
+          version: 'latest-stable'
       - uses: conda-incubator/setup-miniconda@v3
         with:
           miniforge-version: latest

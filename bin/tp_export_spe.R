@@ -2,20 +2,22 @@
 # Process 4 (R) - one SpatialExperiment per sample and one combined per scale.
 #
 # Reads exactly the files the AnnData export reads (matched by the prefix <sample>_mpp<scale>):
-#   <prefix>.tiles.tsv.gz    tile table from Process 1 (only tiles with keep == TRUE are exported)
+#   <prefix>.tiles.tsv.gz    tile table from Process 1 (the extracted tiles are exported; column
+#                            `keep` marks those that pass every QC threshold)
 #   <prefix>.prepare.json    provenance and thumbnail scale factor
 #   <prefix>.thumbnail.png   low-resolution image for imgData()
 #   <prefix>.uni2h.h5        Output2a  (optional)
 #   <prefix>.lbp.h5          Output2b  (optional)
 #   <prefix>.counts.h5       Output3   (genes x tiles, may have 0 genes)
+#   <prefix>.*.lineage.json  lineage of the steps above
 #
 # Layout of each object:
-#   assay "counts"     genes x tiles (sum of Visium HD bins, or the Visium spot)
+#   assay "counts"     genes x tiles (sum of Visium HD bins, Visium spots split by area, or the spot)
 #   colData            the tile table (QC metrics, sample metadata, ...)
 #   spatialCoords      tile centre in full-resolution pixels (pxl_col_in_fullres, pxl_row_in_fullres)
-#   reducedDims        UNI2H (1536), LBP_HE, LBP_GREY, INTENSITY_HE
+#   reducedDims        UNI2H (1536), LBP_HE, LBP_GREY, LBP_RGB, LBP_CENTER_*, INTENSITY_HE (those computed)
 #   imgData            the thumbnail, with its scale factor to full-resolution pixels
-#   metadata$tileparity provenance (parameters, model, LBP radii, ...)
+#   metadata$tileparity provenance (parameters, model, LBP radii, ...) and the lineage (JSON text)
 
 suppressPackageStartupMessages({
     library(SpatialExperiment)
@@ -28,13 +30,16 @@ suppressPackageStartupMessages({
 })
 
 parse_args <- function(argv) {
-    out <- list(input_dir = ".", combined_name = NULL, no_combined = FALSE)
+    out <- list(input_dir = ".", combined_name = NULL, no_combined = FALSE, process = "TILEPARITY_EXPORTSPE",
+                tileparity_version = NA_character_)
     i <- 1
     while (i <= length(argv)) {
         a <- argv[[i]]
         if (a == "--input-dir") { out$input_dir <- argv[[i + 1]]; i <- i + 2 }
         else if (a == "--combined-name") { out$combined_name <- argv[[i + 1]]; i <- i + 2 }
         else if (a == "--no-combined") { out$no_combined <- TRUE; i <- i + 1 }
+        else if (a == "--process") { out$process <- argv[[i + 1]]; i <- i + 2 }
+        else if (a == "--tileparity-version") { out$tileparity_version <- argv[[i + 1]]; i <- i + 2 }
         else stop("unknown argument: ", a)
     }
     if (is.null(out$combined_name)) stop("--combined-name is required")
@@ -50,8 +55,14 @@ read_matrix_rows <- function(file, name) {
 
 NUMERIC_COLUMNS <- c("scale_mpp", "tile_px", "tile_um", "row", "col", "x0_px", "y0_px", "cx_px", "cy_px",
                      "cx_fullres", "cy_fullres", "cx_um", "cy_um", "tissue_fraction", "st_coverage",
-                     "n_st_units", "lapvar", "pen_fraction", "dark_fraction")
-BOOL_COLUMNS <- c("inside_image", "blur_flag", "pen_flag", "dark_flag", "keep")
+                     "n_st_units", "st_units_equiv", "lapvar", "pen_fraction", "dark_fraction")
+BOOL_COLUMNS <- c("inside_image", "blur_flag", "pen_flag", "dark_flag", "extract", "keep")
+# blocks of one channel set are joined; different channel sets stay separate alternatives
+COMBINED_BLOCKS <- list(
+    LBP_HE = c("LBP_H", "LBP_E"), LBP_GREY = "LBP_GREY", LBP_RGB = c("LBP_R", "LBP_G", "LBP_B"),
+    LBP_CENTER_HE = c("LBP_CENTER_H", "LBP_CENTER_E"), LBP_CENTER_GREY = "LBP_CENTER_GREY",
+    LBP_CENTER_RGB = c("LBP_CENTER_R", "LBP_CENTER_G", "LBP_CENTER_B"), INTENSITY_HE = "INTENSITY_HE"
+)
 
 # Same typing rules as tileparity_lib.tiling.read_tiles(): numbers, booleans, everything else text
 read_tiles <- function(path) {
@@ -64,13 +75,14 @@ read_tiles <- function(path) {
             df[[col]] <- suppressWarnings(as.numeric(ifelse(df[[col]] == "", NA, df[[col]])))
         }
     }
-    df[df$keep, , drop = FALSE]
+    sel <- if ("extract" %in% names(df)) df$extract else df$keep
+    df[sel, , drop = FALSE]
 }
 
 read_features <- function(path, tile_ids) {
     ids <- as.character(h5read(path, "tile_id"))
     idx <- match(tile_ids, ids)
-    if (anyNA(idx)) stop(basename(path), ": ", sum(is.na(idx)), " kept tiles have no features")
+    if (anyNA(idx)) stop(basename(path), ": ", sum(is.na(idx)), " extracted tiles have no features")
     groups <- h5ls(path)
     block_names <- unique(groups$name[groups$group == "/blocks"])
     out <- list()
@@ -90,7 +102,7 @@ read_counts <- function(path, tile_ids) {
     n_genes <- as.integer(h5readAttributes(path, "/matrix")$n_genes)
     tiles <- as.character(h5read(path, "/matrix/barcodes"))
     idx <- match(tile_ids, tiles)
-    if (anyNA(idx)) stop(basename(path), ": ", sum(is.na(idx)), " kept tiles have no counts")
+    if (anyNA(idx)) stop(basename(path), ": ", sum(is.na(idx)), " extracted tiles have no counts")
     if (length(n_genes) == 0 || n_genes == 0) {
         m <- sparseMatrix(i = integer(0), j = integer(0), x = numeric(0), dims = c(0L, length(tile_ids)))
         colnames(m) <- tile_ids
@@ -106,6 +118,52 @@ read_counts <- function(path, tile_ids) {
     rownames(m) <- ids
     colnames(m) <- tiles
     list(counts = m[, idx, drop = FALSE], gene_names = gene_names)
+}
+
+# ---- lineage (same layout as bin/tileparity_lib/lineage.py; checksums are MD5 here) ----------
+lineage_parents <- function(dir, prefix) {
+    steps <- c("uni2h", "lbp", "st", "prepare")
+    files <- file.path(dir, paste0(prefix, ".", steps, ".lineage.json"))
+    files <- files[file.exists(files)]
+    leaves <- files[!grepl("\\.prepare\\.lineage\\.json$", files)]
+    if (length(leaves)) leaves else files
+}
+
+build_lineage <- function(step, process, prefix, outputs, parents, version, parameters = list()) {
+    ancestors <- setNames(list(), character(0))
+    uids <- character(0)
+    for (f in parents) {
+        p <- fromJSON(f, simplifyVector = FALSE)
+        for (k in names(p$ancestors)) ancestors[[k]] <- p$ancestors[[k]]
+        ancestors[[p$record$uid]] <- p$record
+        uids <- c(uids, p$record$uid)
+        if (is.na(version)) version <- p$record$tileparity_version
+    }
+    out_info <- lapply(outputs, function(f) list(name = basename(f), bytes = unname(file.size(f)),
+                                                 md5 = unname(tools::md5sum(f))))
+    record <- list(
+        step = step, process = process, prefix = prefix,
+        created_utc = format(Sys.time(), "%Y-%m-%dT%H:%M:%SZ", tz = "UTC"),
+        tileparity_version = version,
+        command = as.list(c("tp_export_spe.R", commandArgs(trailingOnly = TRUE))),
+        parameters = if (length(parameters)) parameters else setNames(list(), character(0)),
+        software = list(R = as.character(getRversion()),
+                        SpatialExperiment = as.character(packageVersion("SpatialExperiment")),
+                        rhdf5 = as.character(packageVersion("rhdf5"))),
+        inputs = setNames(list(), character(0)),
+        outputs = out_info,
+        parents = as.list(uids)
+    )
+    tmp <- tempfile(fileext = ".json")
+    writeLines(toJSON(record, auto_unbox = TRUE), tmp)
+    digest <- substr(unname(tools::md5sum(tmp)), 1, 12)
+    unlink(tmp)
+    list(schema = "tileparity-lineage/1", record = c(list(uid = paste(step, prefix, digest, sep = ":")), record),
+         ancestors = ancestors)
+}
+
+write_lineage <- function(lin, path) {
+    writeLines(toJSON(lin, auto_unbox = TRUE, pretty = TRUE, null = "null", na = "null"), path)
 }
 
 build_spe <- function(dir, prefix) {
@@ -124,9 +182,10 @@ build_spe <- function(dir, prefix) {
     }
     if (file.exists(f(".lbp.h5"))) {
         l <- read_features(f(".lbp.h5"), tile_ids)
-        if (all(c("LBP_H", "LBP_E") %in% names(l$blocks))) rd$LBP_HE <- cbind(l$blocks$LBP_H, l$blocks$LBP_E)
-        if ("LBP_GREY" %in% names(l$blocks)) rd$LBP_GREY <- l$blocks$LBP_GREY
-        if ("INTENSITY_HE" %in% names(l$blocks)) rd$INTENSITY_HE <- l$blocks$INTENSITY_HE
+        for (name in names(COMBINED_BLOCKS)) {
+            parts <- COMBINED_BLOCKS[[name]]
+            if (all(parts %in% names(l$blocks))) rd[[name]] <- do.call(cbind, unname(l$blocks[parts]))
+        }
         provenance$lbp <- l$attrs
     }
     cnt <- read_counts(f(".counts.h5"), tile_ids)
@@ -151,8 +210,11 @@ build_spe <- function(dir, prefix) {
         spe <- addImg(spe, imageSource = thumb, scaleFactor = as.numeric(prep$thumbnail$fullres_to_thumbnail),
                       sample_id = sample, image_id = "thumbnail", load = TRUE)
     }
+    parents <- lineage_parents(dir, prefix)
+    merged <- build_lineage("sample", "tileparity", prefix, list(), parents, NA_character_)
+    provenance$lineage <- as.character(toJSON(merged, auto_unbox = TRUE, null = "null", na = "null"))
     metadata(spe)$tileparity <- provenance
-    spe
+    list(spe = spe, parents = parents)
 }
 
 combine_spe <- function(spes) {
@@ -195,16 +257,37 @@ main <- function() {
     prefixes <- sort(sub("\\.tiles\\.tsv\\.gz$", "", files))
     if (length(prefixes) == 0) stop("no *.tiles.tsv.gz files found")
     spes <- list()
+    leaves <- character(0)
+    parents_by_sample <- list()
     for (p in prefixes) {
-        spe <- build_spe(args$input_dir, p)
-        saveRDS(spe, paste0(p, ".rds"))
+        built <- build_spe(args$input_dir, p)
+        spe <- built$spe
+        parents_by_sample[[metadata(spe)$tileparity$prepare$sample_id]] <- built$parents
+        out <- paste0(p, ".rds")
+        saveRDS(spe, out)
+        lin <- build_lineage("spe", args$process, p, list(spe = out), built$parents, args$tileparity_version)
+        write_lineage(lin, paste0(p, ".spe.lineage.json"))
+        leaves <- c(leaves, paste0(p, ".spe.lineage.json"))
         message(sprintf("%s: %d tiles x %d genes; reducedDims: %s", p, ncol(spe), nrow(spe),
                         paste(reducedDimNames(spe), collapse = ", ")))
         spes[[p]] <- spe
     }
     if (!args$no_combined) {
         combined <- combine_spe(spes)
-        if (!is.null(combined)) saveRDS(combined, paste0(args$combined_name, ".rds"))
+        if (!is.null(combined)) {
+            out <- paste0(args$combined_name, ".rds")
+            included <- sort(unique(as.character(combined$sample_id)))
+            # the object carries the lineage of every sample it contains, like the per-sample objects
+            merged <- build_lineage("combined", "tileparity", args$combined_name, list(),
+                                    unlist(parents_by_sample[included], use.names = FALSE), args$tileparity_version)
+            metadata(combined)$tileparity <- list(
+                version = args$tileparity_version, samples = included,
+                lineage = as.character(toJSON(merged, auto_unbox = TRUE, null = "null", na = "null")))
+            saveRDS(combined, out)
+            write_lineage(build_lineage("spe_combined", args$process, args$combined_name, list(spe = out), leaves,
+                                        args$tileparity_version),
+                          paste0(args$combined_name, ".spe.lineage.json"))
+        }
     }
 }
 

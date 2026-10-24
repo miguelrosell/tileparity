@@ -12,9 +12,6 @@ process UNI2H_DOWNLOAD {
     path "uni2h/pytorch_model.bin", emit: weights
     path "versions.yml"            , emit: versions
 
-    when:
-    task.ext.when == null || task.ext.when
-
     script:
     """
     if [ -z "\${HF_TOKEN:-}" ]; then

@@ -1,4 +1,5 @@
-sample,image,spatial,spatial_format,tiling,mpp,patient,condition,cohort
-test_hd,he_synthetic.tif,hd_test/outs,spaceranger_hd,,,P1,CRC,A
-test_visium,he_synthetic.tif,visium_test/outs,spaceranger,,0.25,P2,CRC,B
-test_image_only,he_synthetic.tif,,,,,P3,none,C
+sample,image,spatial,spatial_format,tiling,mpp,mask,patient,condition,cohort
+test_hd,he_synthetic.tif,hd_test/outs,spaceranger_hd,,,,P1,CRC,A
+test_visium,he_synthetic.tif,visium_test/outs,spaceranger,,0.25,,P2,CRC,B
+test_hest_spot,he_synthetic.tif,hest_test.h5ad,hest,spot,0.25,,P2,CRC,B
+test_image_only,he_synthetic.tif,,,,,he_synthetic_mask.png,P3,none,C

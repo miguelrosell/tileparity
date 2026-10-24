@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Processes 1a + 2a - UNI2-h embeddings (1536-d class token) for every kept tile."""
+"""Processes 1a + 2a - UNI2-h embeddings (1536-d class token) for every extracted tile."""
 
 import argparse
 import logging
@@ -8,7 +8,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from tileparity_lib import features, uni2h  # noqa: E402
+from tileparity_lib import features, lineage, uni2h  # noqa: E402
 from tileparity_lib.tiling import read_tiles  # noqa: E402
 
 
@@ -23,6 +23,7 @@ def main(argv=None):
     ap.add_argument("--precision", default="fp16", choices=["fp32", "fp16", "bf16"])
     ap.add_argument("--batch-size", type=int, default=32)
     ap.add_argument("--num-workers", type=int, default=4)
+    lineage.add_cli(ap)
     args = ap.parse_args(argv)
 
     tiles = read_tiles(args.tiles)
@@ -42,6 +43,11 @@ def main(argv=None):
     columns = [f"uni2h_{i:04d}" for i in range(uni2h.EMBED_DIM)]
     features.write(f"{args.prefix}.uni2h.h5", tiles["tile_id"].to_numpy(dtype=object), {"UNI2H": (emb, columns)},
                    attrs=attrs, block_attrs={"UNI2H": attrs})
+    params = vars(args) | {"model_source": source, "weights_sha256": attrs.get("weights_sha256")}
+    lineage.write(f"{args.prefix}.uni2h.lineage.json", lineage.build(
+        "uni2h", args.process or "UNI2H_EMBED", Path(args.prefix).name, parameters=params,
+        inputs={"image": args.image, "tiles": args.tiles}, outputs={"features": f"{args.prefix}.uni2h.h5"},
+        parents=args.lineage_parent, packages=["torch", "timm", "pyvips", "h5py", "numpy"]))
 
 
 if __name__ == "__main__":
