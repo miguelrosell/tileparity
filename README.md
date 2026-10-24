@@ -132,8 +132,8 @@ A new extractor is one module that reads `[meta, resampled.tif, tiles.tsv.gz, pr
 Version 0.2.0 (changes in [CHANGELOG.md](CHANGELOG.md)). What has been run so far:
 
 * the Python library: 77 unit tests, including LBP histograms identical to fastLBP's whole-image run;
-* the whole workflow on the synthetic test data without containers, with every option of the test profile switched on and both exports (AnnData; SpatialExperiment with R 4.3 / SpatialExperiment 1.12), with Nextflow 26.10.3; lint and stub runs with Nextflow 25.04.0, 25.04.7, 26.04.7 and 26.10.3;
-* GitHub Actions: `CI` runs the unit tests, lint and a stub run with the oldest supported and the latest Nextflow on every push; `Containers` builds the three images and runs the test profile inside them in Docker.
+* the whole workflow on the synthetic test data without containers, with every option of the test profile switched on and both exports (AnnData; SpatialExperiment with R 4.3 / SpatialExperiment 1.12), with Nextflow 25.04.0 and 26.10.3; stub runs with 25.04.0, 25.04.7, 26.04.7 and 26.10.3, and `nextflow lint` without errors with 25.04.7, 26.04.7 and 26.10.3 (the linter of 25.04.0 wrongly reports `meta` as undefined in `conf/modules.config`);
+* GitHub Actions: `CI` runs the unit tests, a stub run with the oldest supported and the latest Nextflow, and lint with the latest, on every push; `Containers` builds the three images and runs the test profile inside them in Docker.
 
 The GPU path (CUDA) has not been run yet; the first real run on a GPU machine will be its test. Neither has a full-size slide: the first real samples will show the real run times.
 

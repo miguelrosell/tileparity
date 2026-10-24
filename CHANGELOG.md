@@ -33,7 +33,7 @@ Changes discussed and agreed before the first run on real data.
 
 **Compatibility, running and documentation**
 
-* Nextflow ≥ 25.04 (0.1 declared ≥ 24.10, but Nextflow 24.10 cannot compile the samplesheet subworkflow); tested with the strict syntax of the current releases (26.04, 26.10): no variable declarations in configs, completion handler inside the workflow, no deprecated `when:` sections or implicit closure parameters. CI lints and stub-runs with 25.04.0 and the latest stable release.
+* Nextflow ≥ 25.04 (0.1 declared ≥ 24.10, but Nextflow 24.10 cannot compile the samplesheet subworkflow); tested with the strict syntax of the current releases (26.04, 26.10): no variable declarations in configs, completion handler inside the workflow, no deprecated `when:` sections or implicit closure parameters. CI stub-runs with 25.04.0 and the latest stable release, and lints with the latest (the linter of 25.04.0 wrongly reports `meta` as undefined in the publishDir closures).
 * SLURM partitions and options are parameters (`--slurm_queue`, `--slurm_gpu_queue`, `--slurm_options`, `--slurm_gpu_options`) for `-profile uzh_rolandgarros` and `-profile slurm`.
 * New docs: [lbp.md](docs/lbp.md) (LBP step by step), [structure.md](docs/structure.md) (processes, files, lineage), [rolandgarros.md](docs/rolandgarros.md) (first real run). `design.md` corrects the effect of cutting tiles without context: at R = 45 the circles of 64 % of a tile's pixels leave the tile, but only 3–5 % of the codes change (1–5 % over all radii; `scripts/border_effect.py`).
 * Container images 0.2.0; the Python image adds scikit-learn, numba, umap-learn and plotly for the QC page.

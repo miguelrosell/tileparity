@@ -26,8 +26,10 @@ jobs:
         run: python -m pytest tests/python -q
 
   nextflow:
-    # Lint and stub run with the oldest supported Nextflow (manifest.nextflowVersion) and
-    # with the latest stable release, which reads scripts and configs with the strict syntax
+    # Stub run with the oldest supported Nextflow (manifest.nextflowVersion) and with the
+    # latest stable release, which reads scripts and configs with the strict syntax and
+    # also lints the code. (The linter of 25.04.0 wrongly reports `meta` as undefined in
+    # the publishDir closures of conf/modules.config; 25.04.7 and later do not.)
     name: nextflow (${{ matrix.nextflow }})
     runs-on: ubuntu-latest
     strategy:
@@ -44,6 +46,7 @@ jobs:
         with:
           version: ${{ matrix.nextflow }}
       - name: Lint
+        if: matrix.nextflow == 'latest-stable'
         run: nextflow lint .
       - name: Stub run of the test profile
         run: nextflow run . -profile test -stub-run --outdir results_stub
