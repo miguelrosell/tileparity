@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "tileparity"
-version = "0.2.0"
+version = "0.3.0"
 description = "Harmonised H&E tiling for fair comparison of image feature extractors"
 requires-python = ">=3.11"
 license = {text = "MIT"}

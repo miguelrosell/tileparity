@@ -1,19 +1,24 @@
-// The tileparity subworkflow: one preparation, two feature extractors on the same tiles,
-// expression per tile, and export.
+// The tileparity subworkflow: one preparation, two feature extractors on the same tiles and
+// the same input images, expression per tile, and export.
 //
-//   Input1 --[1 PREPARE]--> Output1 = Input2 (resampled image, tile table, unit->tile assignment)
-//                              |-- [1a+2a UNI2H_EMBED] ----------------> Output2a (tiles x 1536)
-//                              |-- [1b LBPCHANNELS] -> [2b FASTLBP_EXTRACT] -> Output2b (tiles x d)
+//   Input1 --[1 PREPARE]--> Output1 = Input2: resampled image (input set rgb), tile table,
+//                              |              unit->tile assignment
+//                              |-- [1b CHANNELS] --------------------> channels image: H, E, R, G, B and
+//                              |                                       the image rebuilt from H and E
+//                              |                                       only (input set rgb_he)
+//                              |-- [2b FASTLBP_EXTRACT] (channels) --> Output2b (LBP per channel)
+//                              |-- [1a+2a UNI2H_EMBED] (rgb, rgb_he) -> Output2a (tiles x 1536 per set)
 //                              |-- [3 AGGREGATEST] ------------------> Output3 (genes x tiles)
 //                              |-- [4 EXPORTSPE / EXPORTANNDATA] ----> SpatialExperiment, AnnData
 //                              '-- [QCUMAP] (optional) --------------> 3-D UMAP of every view
 //
-// Only PREPARE makes geometric decisions; every later step reads its tile table. Every step
-// writes a lineage file that contains the lineage of its inputs, so the export's lineage
+// Only PREPARE makes geometric decisions; every later step reads its tile table. CHANNELS
+// computes every input image once, so UNI2-h and fastLBP read exactly the same pixels. Every
+// step writes a lineage file that contains the lineage of its inputs, so the export's lineage
 // holds the whole route from the original image.
 
 include { TILEPARITY_PREPARE       } from '../../../modules/local/tileparity/prepare/main'
-include { TILEPARITY_LBPCHANNELS   } from '../../../modules/local/tileparity/lbpchannels/main'
+include { TILEPARITY_CHANNELS      } from '../../../modules/local/tileparity/channels/main'
 include { FASTLBP_EXTRACT          } from '../../../modules/local/fastlbp/extract/main'
 include { UNI2H_DOWNLOAD           } from '../../../modules/local/uni2h/download/main'
 include { UNI2H_EMBED              } from '../../../modules/local/uni2h/embed/main'
@@ -42,16 +47,26 @@ workflow TILEPARITY {
     ch_tiles   = TILEPARITY_PREPARE.out.tiles
     ch_lineage = TILEPARITY_PREPARE.out.lineage
 
-    // ---- Processes 1b + 2b: fastLBP branch -------------------------------------------------
+    // ---- Process 1b: the input images of both extractors -------------------------------------
+    def uni2h_sets = params.uni2h_inputs.toString().toLowerCase().tokenize(',')*.trim()
+    def need_rgb_he = !params.skip_uni2h && ('rgb_he' in uni2h_sets)
+    if (!params.skip_lbp || need_rgb_he) {
+        TILEPARITY_CHANNELS(ch_image.join(ch_tiles).join(ch_lineage))
+        ch_channels = TILEPARITY_CHANNELS.out.channels   // [ meta, channels.tif, channels.json, lineage ]
+        ch_channels_report = ch_channels.map { meta, _image, report, _lineage -> [meta, report] }
+        ch_versions = ch_versions.mix(TILEPARITY_CHANNELS.out.versions.first())
+    } else {
+        ch_channels = channel.empty()
+        ch_channels_report = ch_tiles.map { meta, _tiles -> [meta, []] }
+    }
+
+    // ---- Process 2b: fastLBP branch ----------------------------------------------------------
     if (params.skip_lbp) {
         ch_lbp = ch_tiles.map { meta, _tiles -> [meta, [], []] }
     } else {
-        TILEPARITY_LBPCHANNELS(ch_image.join(ch_lineage))
-        FASTLBP_EXTRACT(TILEPARITY_LBPCHANNELS.out.channels.join(ch_tiles))
+        FASTLBP_EXTRACT(ch_channels.join(ch_tiles))
         ch_lbp = FASTLBP_EXTRACT.out.features
-        ch_versions = ch_versions
-            .mix(TILEPARITY_LBPCHANNELS.out.versions.first())
-            .mix(FASTLBP_EXTRACT.out.versions.first())
+        ch_versions = ch_versions.mix(FASTLBP_EXTRACT.out.versions.first())
     }
 
     // ---- Processes 1a + 2a: UNI2-h branch --------------------------------------------------
@@ -67,7 +82,13 @@ workflow TILEPARITY {
             ch_weights = UNI2H_DOWNLOAD.out.weights.first()
             ch_versions = ch_versions.mix(UNI2H_DOWNLOAD.out.versions)
         }
-        UNI2H_EMBED(ch_image.join(ch_tiles).join(ch_lineage), ch_weights)
+        ch_uni_in = ch_image.join(ch_tiles).join(ch_lineage)
+        if (need_rgb_he) {
+            ch_uni_in = ch_uni_in.join(ch_channels)
+        } else {
+            ch_uni_in = ch_uni_in.map { meta, image, tiles, lineage -> [meta, image, tiles, lineage, [], [], []] }
+        }
+        UNI2H_EMBED(ch_uni_in, ch_weights)
         ch_uni = UNI2H_EMBED.out.features
         ch_versions = ch_versions.mix(UNI2H_EMBED.out.versions.first())
     }
@@ -85,8 +106,9 @@ workflow TILEPARITY {
         .join(ch_uni)
         .join(ch_lbp)
         .join(TILEPARITY_AGGREGATEST.out.counts)
-        .map { meta, tiles, json, thumb, prep_lineage, uni, uni_lineage, lbp, lbp_lineage, counts, st_lineage ->
-            [meta.scale_tag, [tiles, json, thumb, prep_lineage, uni, uni_lineage, lbp, lbp_lineage, counts, st_lineage].flatten()]
+        .join(ch_channels_report)
+        .map { meta, tiles, json, thumb, prep_lineage, uni, uni_lineage, lbp, lbp_lineage, counts, st_lineage, channels_report ->
+            [meta.scale_tag, [tiles, json, thumb, prep_lineage, uni, uni_lineage, lbp, lbp_lineage, counts, st_lineage, channels_report].flatten()]
         }
         .groupTuple()
         .map { tag, files -> [[id: "combined_mpp${tag}", scale_tag: tag], files.flatten()] }

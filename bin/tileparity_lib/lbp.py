@@ -29,6 +29,11 @@ Optional ``LBP_CENTER`` block: the codes of the tile's central pixels only (the 
 central pixels of an even-sized tile), as the mean of their one-hot code vectors. It is an
 ablation: the histogram is the same mean taken over all the tile's pixels.
 
+LBP is computed on every channel of the chosen input sets (``--lbp_channels``, see
+:mod:`tileparity_lib.channels`): R, G and B of the slide (``rgb``), R, G and B of the slide
+rebuilt from H and E only (``rgb_he``) and, optionally, the H and E amounts (``he``). Each
+channel gives its own block (``LBP_R``, ``LBP_R_HE``, ``LBP_H``, ...).
+
 An intensity block (mean, standard deviation and 10th/50th/90th percentiles of the H
 and E channels) is computed alongside, because LBP ignores absolute stain amounts.
 """
@@ -66,9 +71,9 @@ def npoints_for(radius: float) -> int:
 class LbpSpec:
     radii: list[int]
     npoints: list[int]
-    channels: list[str]  # channels to compute LBP on, e.g. ["H", "E", "grey"]
+    channels: list[str]  # channels to compute LBP on, e.g. ["R", "G", "B", "R_he", "G_he", "B_he"]
     tile_px: int
-    bands: list[str] = field(default_factory=lambda: ["H", "E", "grey"])  # bands of the channels image
+    bands: list[str] = field(default_factory=lambda: ["H", "E"])  # bands of the channels image (channels.json)
     center: bool = False  # also compute the LBP_CENTER block
 
     @property

@@ -11,14 +11,14 @@ from the original image to the final object::
       "record": {
         "uid": "lbp:A_P1_mpp0.5000:3f9c2a1b7d0e",
         "step": "lbp", "process": "FASTLBP_EXTRACT", "prefix": "A_P1_mpp0.5000",
-        "created_utc": "2026-10-24T10:00:00Z", "tileparity_version": "0.2.0",
+        "created_utc": "2026-10-27T10:00:00Z", "tileparity_version": "0.3.0",
         "command": ["tp_extract_lbp.py", "--channels-image", ...],
         "parameters": {...}, "software": {"python": "3.13.1", "fastlbp": "0.3.4", ...},
         "inputs": {"channels": {"name": ..., "bytes": ..., "sha256": ...}, ...},
         "outputs": {"features": {...}},
-        "parents": ["lbpchannels:A_P1_mpp0.5000:..."]
+        "parents": ["channels:A_P1_mpp0.5000:..."]
       },
-      "ancestors": {"lbpchannels:...": {...}, "prepare:...": {...}}
+      "ancestors": {"channels:...": {...}, "prepare:...": {...}}
     }
 
 ``route(lineage)`` lists the steps from the first to the last, which is what the

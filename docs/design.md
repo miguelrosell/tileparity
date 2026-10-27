@@ -7,16 +7,17 @@ This document records why each default was chosen. Every choice is a parameter, 
 UNI2-h and fastLBP expect different inputs: UNI2-h takes a 224 × 224 px image and returns one vector; fastLBP takes a whole image and builds its own grid of histograms. Tiling the slide separately for each tool produces vectors that do not describe the same regions. `tileparity` therefore separates:
 
 * **Process 1 (shared)** — every geometric decision: pixel size, tissue mask, tile positions, which tiles are extracted and kept, which spatial-transcriptomics unit belongs to which tile (and with which share).
-* **Processes 1a / 1b (adapters)** — only change how each pixel is represented for a given extractor, never which pixels enter.
+* **Process 1b (shared)** — every input image of the extractors, computed once: the slide as it is (input set `rgb`) and the slide rebuilt from haematoxylin and eosin only (`rgb_he`), so both extractors read exactly the same pixels in each set.
+* **Adapter 1a and the reading of 2b** — only change how those pixels are represented for a given extractor (ImageNet normalisation for UNI2-h; one channel at a time for LBP), never which pixels enter.
 * **Processes 2a / 2b (extractors)** and **3 (expression)** — read the tile table and add their own measurements.
 
-| Aspect | UNI2-h (1a → 2a) | fastLBP (1b → 2b) | Same? |
+| Aspect | UNI2-h (1a → 2a) | fastLBP (2b) | Same? |
 |---|---|---|---|
-| Source pixels | resampled RGB | resampled RGB | yes |
+| Source pixels | input sets `rgb` and `rgb_he` (Process 1b) | input sets `rgb` and `rgb_he` (+ optional `he`) | yes |
 | Pixel size | target µm/px | target µm/px | yes |
 | Tiles | tile table (x0, y0, 224 px) | tile table | yes |
 | Tiles with features | `extract == true` | `extract == true` | yes |
-| Pixel representation | 3 values, (x/255 − mean)/sd with ImageNet statistics | 1 value 0–255 per channel: H, E, grey (or R, G, B) | no, by definition of each method |
+| Pixel representation | the 3 channels together, (x/255 − mean)/sd with ImageNet statistics | each channel on its own, 0–255 | same channels; the representation differs by definition of each method |
 | Context outside the tile | none | up to R_max + 1 px of real neighbouring tissue for border pixels | no (see LBP) |
 
 ## Scale (multi-scale by default)
@@ -82,30 +83,51 @@ Stored as columns of the tile table. By default they are only flags: `keep` depe
 
 ## UNI2-h adapter (1a) and embedding (2a)
 
-The architecture and normalisation follow the model card (ViT-H/14, 24 blocks, 1536-d, 8 register tokens, SwiGLU; ImageNet mean/std). The transform is written explicitly — no resize, no centre crop — so UNI2-h sees exactly the tile's pixels; timm's automatic `create_transform` could add a resize/crop depending on the model configuration. The embedding is the class token. Inference uses fp16 autocast on GPU (`--uni2h_precision`), fp32 on CPU.
+The architecture and normalisation follow the model card (ViT-H/14, 24 blocks, 1536-d, 8 register tokens, SwiGLU; ImageNet mean/std). The transform is written explicitly — no resize, no centre crop — so UNI2-h sees exactly the tile's pixels; timm's automatic `create_transform` could add a resize/crop depending on the model configuration. The embedding is the class token. Inference uses fp16 autocast on GPU (`--uni2h_precision`), fp32 on CPU. Each input set (`--uni2h_inputs`, next section) is embedded separately: `rgb` from the resampled image, `rgb_he` from the bands R_he, G_he, B_he of the channels image of Process 1b, giving the blocks `UNI2H_RGB` and `UNI2H_RGB_HE` (1536 columns each, `uni2h_rgb_0000`, … and `uni2h_rgb_he_0000`, …). Two input sets take twice the GPU time.
 
-## LBP adapter (1b)
+## The input images of both extractors (1b)
 
-LBP compares one number with another, so it needs single-channel images. All channels are computed pixel by pixel from the same RGB values, in channel sets (`--lbp_channels`, default `he,grey`):
+UNI2-h reads RGB images; LBP compares one number with another, so it reads one channel at a time. For a fair comparison both receive the same images, in **input sets** (`--uni2h_inputs`, `--lbp_channels`) computed once, pixel by pixel, from the resampled RGB image:
 
-* **`he`: H and E** by colour deconvolution (Ruifrok & Johnston 2001) as in `skimage.color.rgb2hed`: optical density OD = log(max(RGB/255, 10⁻⁶)) / log(10⁻⁶) (Beer–Lambert: OD is linear in the amount of dye), stains = max(OD · M⁻¹, 0), then a **fixed** mapping to 0–255 shared by all samples (H: 0–0.30, E: 0–0.15; fractions above the range are reported). H and E separate nuclear texture from cytoplasm/stroma texture, which keeps the features interpretable.
-* **`grey`**: 0.299 R + 0.587 G + 0.114 B, the usual single-channel reduction.
-* **`rgb`**: R, G and B separately, the input without any colour model.
+| input set | the image | UNI2-h | fastLBP | default |
+|---|---|---|---|---|
+| `rgb` | the slide as it is | reads the image: `UNI2H_RGB` | one LBP per channel R, G, B: `LBP_RGB` | on for both |
+| `rgb_he` | the slide rebuilt from haematoxylin and eosin only | reads the image: `UNI2H_RGB_HE` | one LBP per channel R_he, G_he, B_he: `LBP_RGB_HE` | on for both |
+| `he` | the amounts of H and of E, two single-channel images | — (needs 3 channels) | `LBP_H`, `LBP_E` = `LBP_HE` | off |
 
-The sets are alternatives to compare (are H and E better than grey, or than the raw colour channels?), stored as separate blocks and never concatenated with each other.
+The sets are alternatives to compare, stored as separate blocks and never concatenated with each other. Comparing `rgb` with `rgb_he` in each extractor tells how much it relies on colour that is neither H nor E (scanner tint, pigment, pen): a batch effect that disappears in `rgb_he` came from that colour.
+
+**How `rgb_he` is made** (colour deconvolution, Ruifrok & Johnston 2001):
+
+1. optical density per pixel and channel, OD = log(max(RGB/255, 10⁻⁶)) / log(10⁻⁶). By Beer–Lambert, OD is proportional to the amount of dye, and the OD of two dyes on top of each other is the sum of their ODs;
+2. every pixel's OD (a point in 3-D) is written as a_H · H + a_E · E + a_R · R, where H and E are the colours of the two stains (unit vectors in OD space) and R = H × E is the direction perpendicular to both;
+3. `rgb_he` keeps a_H · H + a_E · E — the closest colour made of H and E only — and turns it back into RGB, 255 · 10⁻⁶^OD, rounded to 8 bits.
+
+The removed part a_R · R is what two stains cannot explain: pen marks, pigment, the colour of the glass or a tint of the scanner, noise. For an H&E slide it is small: on the tiles of two real H&E images 3–5 % of the optical density, and R, G and B move by 2–3 levels (of 255) on average. Strongly red blood cells (haemoglobin's own colour on top of eosin) can lose part of their red. `channels/<id>.rgb_he_qc.png` shows, for every sample and scale, the slide, its rebuilt version, how much each pixel changed and the tiles with the median, 90th-percentile and largest change; `rgb_he_qc.tsv` has the numbers per tile.
+
+Why not give UNI2-h the H and E amounts directly: its first layer takes exactly three channels (a 14 × 14 px patch embedding of R, G and B) and it was trained on ordinary RGB images of H&E slides. An image made of H, E and a third channel would be unlike anything it has seen. `rgb_he` is still an ordinary-looking H&E image — R, G, B built from two numbers per pixel — so UNI2-h can read it and fastLBP reads the same pixels. The grey channel set of tileparity 0.2 was removed for the same reason: a fixed mixture of R, G and B (0.299, 0.587, 0.114, tuned to human brightness) has no counterpart in UNI2-h, and its information is in R, G and B.
+
+**Stain vectors** (`--stain_vectors`):
+
+* `slide` (default): estimated on each slide with the method of Macenko et al. (2009), from about one million random pixels of up to 500 random extracted tiles (fixed seed): keep the stained pixels (length of the natural-log OD vector ≥ 0.15), find the plane through the origin that holds most of their optical density (the two largest singular vectors of the OD matrix), and take as H and E the directions at the 1st and 99th percentile of the angle in that plane (H: the one that absorbs more red). Common implementations of Macenko keep the pixels with OD ≥ 0.15 in every channel instead; that drops pale eosin-stained stroma, which absorbs little red, and on a real H&E image left 5.6 % of the OD outside the plane instead of 3.5 %.
+* `standard`: Ruifrok and Johnston's published vectors (those of `skimage.color.rgb2hed`), the same for every slide. Also used when a slide's sample has fewer than 10 000 stained pixels or the estimate is not a plausible pair of stain colours (a clearly negative component, or H and E less than 5° apart); `channels.json` says so.
+
+Stain colours vary between laboratories, protocols and scanners. On three real H&E images, the slides' own vectors left 1–4 % of the optical density outside the plane (R, G, B moved by 1–3 levels on average); the standard vectors 5–22 % (3–23 levels), the largest on a Visium image with a grey tint, whose rebuilt version visibly changed colour. The estimated vectors were 7–20° (H) and 7–34° (E) away from the standard ones. `rgb_he` depends only on the plane, not on the two directions within it; the directions matter for the `he` channels and the intensity block. When H and E come out less than 15° apart (a slide with little eosin, for example), `channels.json` notes that their amounts are poorly separated.
+
+**`he` channels**: max(a, 0) mapped to 0–255 with a **fixed** range shared by all samples (H: 0–0.30, E: 0–0.15 in the OD units above; the fractions of pixels above the range are reported in `channels.json`). H and E separate nuclear texture from cytoplasm/stroma texture. They are always computed, because fastLBP's intensity block (below) is made from them.
 
 ## LBP features (2b)
 
 For each pixel c, radius R and P points on the circle (bilinear interpolation), bit_p = 1 if g_p ≥ g_c. If the bit pattern has at most two 0/1 changes round the circle (a *regular* or "uniform" pattern) the code is the number of ones (0…P), otherwise P + 1, giving P + 2 rotation-invariant codes. Each tile's histogram counts the codes of its 224 × 224 pixels (50 176 per radius and channel). [lbp.md](lbp.md) explains every step with examples.
 
-* **Radii**: fastLBP's progression round(1.499 · 1.327^i) up to a quarter of the tile: 1, 2, 3, 4, 5, 6, 8, 11, 14, 19, 25, 34, 45 px (0.5–22.5 µm at 0.5 µm/px), with P = ⌈2πR⌉. 1145 features per channel, 2290 for H + E.
-* **Context**: the codes of border pixels use the real neighbouring tissue (the tile is read with a margin of R_max + 1 px), so they equal those of a whole-slide computation. Cutting isolated tiles instead would give the circle points outside the tile the value 0 (fastLBP's convention outside the image). At R = 45 the circles of 64 % of a 224 px tile's pixels reach outside it, but most of those patterns are irregular with or without the real neighbours, so on a real stained section only 1–5 % of the codes change (depending on radius and channel; 3.0–5.4 % at R = 45), and the histogram by 0.6–4.6 % (total-variation distance; measured by [`scripts/border_effect.py`](../scripts/border_effect.py), table in [lbp.md](lbp.md#pixels-near-the-tile-border)). Small but systematic, hence the margin. The price is a small, documented asymmetry: for border pixels LBP looks up to 45 px beyond the tile, UNI2-h does not. Outside the slide the image is mirrored.
+* **Radii**: fastLBP's progression round(1.499 · 1.327^i) up to a quarter of the tile: 1, 2, 3, 4, 5, 6, 8, 11, 14, 19, 25, 34, 45 px (0.5–22.5 µm at 0.5 µm/px), with P = ⌈2πR⌉. 1145 features per channel, 3435 for an RGB input set.
+* **Context**: the codes of border pixels use the real neighbouring tissue (the tile is read with a margin of R_max + 1 px), so they equal those of a whole-slide computation. Cutting isolated tiles instead would give the circle points outside the tile the value 0 (fastLBP's convention outside the image). At R = 45 the circles of 64 % of a 224 px tile's pixels reach outside it, but most of those patterns are irregular with or without the real neighbours, so on a real stained section only 1–5 % of the codes change (depending on radius and channel; 3.0–4.5 % at R = 45), and the histogram by 0.6–3.9 % (total-variation distance; measured by [`scripts/border_effect.py`](../scripts/border_effect.py), table in [lbp.md](lbp.md#pixels-near-the-tile-border)). Small but systematic, hence the margin. The price is a small, documented asymmetry: for border pixels LBP looks up to 45 px beyond the tile, UNI2-h does not. Outside the slide the image is mirrored.
 * **Implementation**: `fastlbp.lbp.uniform_lbp_uint8_padded_absolute` with absolute coordinates, i.e. fastLBP's own kernel. The unit test `tests/python/test_lbp.py` checks that the per-tile histograms are identical to `fastlbp.run_fastlbp` on the whole image.
 * **Irregular patterns**: large circles have many points and are irregular more often; a radius at which nearly every pixel is irregular adds little information. `lbp/<id>.lbp_qc.png` and `.tsv` report the share per channel and radius on every slide, to choose `--lbp_radii` on real data.
 * **Central pixels (optional, `--lbp_center`)**: `LBP_CENTER_<SET>` blocks with the codes of the tile's central 2 × 2 pixels only (mean of their one-hot code vectors), to compare "the tile's centre" with "the whole tile".
 * **Intensity block**: LBP is invariant to any strictly increasing change of intensity (the sign of g_p − g_c does not change), so it ignores how much stain there is. Mean, SD and 10/50/90th percentiles of H and E (10 numbers per tile) are stored as a separate block (`INTENSITY_HE`), so analyses can separate "UNI2-h sees colour" from "UNI2-h sees structure".
 * **Analysis recipe**: the stored values are raw counts. The blocks of a concatenated vector do not weigh the same (more columns at large radii; the irregular bins carry a large share of the variance), so analyses should use proportions, the Hellinger transform (square root) and equal weight per radius and channel (multiple factor analysis). The QC UMAP uses this recipe.
-* **No stain normalisation by default**: LBP codes are unaffected by brightness/contrast changes, and UNI2-h was trained on varied staining. The effect can be measured with the NCT-CRC-HE-100K benchmark, which ships with and without Macenko normalisation.
+* **No stain normalisation to a reference**: LBP codes are unaffected by brightness/contrast changes, and UNI2-h was trained on varied staining. The input set `rgb_he` removes only the colour that is neither H nor E; it does not map the slide's H and E onto reference colours. The effect of full normalisation can be measured with the NCT-CRC-HE-100K benchmark, which ships with and without Macenko normalisation.
 
 ## Expression per tile (3)
 
@@ -127,7 +149,7 @@ The number of summed units and the total counts per tile are stored (`counts_sum
 
 ## Exports (4)
 
-SpatialExperiment (primary, R/Bioconductor) and AnnData (Python) are built independently from the same intermediate files. Per sample: `assay(counts)` genes × tiles, `colData` = tile table (the extracted tiles, with `extract`, `keep` and `qc_fail`), `spatialCoords` = tile centre in full-resolution pixels, `reducedDims` = `UNI2H`, `LBP_HE`, `LBP_GREY`, `LBP_RGB`, `LBP_CENTER_*` (those computed) and `INTENSITY_HE`, `imgData` = thumbnail. A combined object per scale keeps the genes shared by all samples with expression. LBP histograms are stored as raw counts; divide by 50 176 for frequencies. Counts are integers except with `--visium_split fraction`.
+SpatialExperiment (primary, R/Bioconductor) and AnnData (Python) are built independently from the same intermediate files. Per sample: `assay(counts)` genes × tiles, `colData` = tile table (the extracted tiles, with `extract`, `keep` and `qc_fail`), `spatialCoords` = tile centre in full-resolution pixels, `reducedDims` = `UNI2H_RGB`, `UNI2H_RGB_HE`, `LBP_RGB`, `LBP_RGB_HE`, `LBP_HE`, `LBP_CENTER_*` (those computed) and `INTENSITY_HE`, `imgData` = thumbnail. A combined object per scale keeps the genes shared by all samples with expression. LBP histograms are stored as raw counts; divide by 50 176 for frequencies. Counts are integers except with `--visium_split fraction`.
 
 ## Lineage and figures
 
@@ -137,4 +159,4 @@ Every figure carries a caption in four parts (what it shows, how to read it, cav
 
 ## Optional QC: 3-D UMAP (`--qc_umap`)
 
-One interactive HTML page per scale with a 3-D UMAP of every feature view: UNI2-h (z-scored), each LBP channel set (the analysis recipe above) and expression (counts per 10 000, log1p, 2 000 most variable genes; samples without expression are left out of this view), each after PCA to at most 50 components. Points can be coloured by sample, `keep`, tissue fraction, blur flag or total counts. It is a quick look for batch effects and artefacts, not an analysis: UMAP keeps neighbourhoods but distorts distances.
+One interactive HTML page per scale with a 3-D UMAP of every feature view: UNI2-h on each input set (z-scored), LBP on each input set (the analysis recipe above) and expression (counts per 10 000, log1p, 2 000 most variable genes; samples without expression are left out of this view), each after PCA to at most 50 components. Points can be coloured by sample, `keep`, tissue fraction, blur flag or total counts. It is a quick look for batch effects and artefacts, not an analysis: UMAP keeps neighbourhoods but distorts distances.

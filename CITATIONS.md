@@ -26,3 +26,7 @@ Methods used by the options added in 0.2.0:
 * **UMAP** (`--qc_umap`) — McInnes L., Healy J., Melville J. UMAP: Uniform Manifold Approximation and Projection for dimension reduction. arXiv:1802.03426 (2018).
 * **scikit-learn** (PCA for `--qc_umap`) — Pedregosa F. et al. Scikit-learn: machine learning in Python. *JMLR* 12, 2825–2830 (2011).
 * **Plotly** (interactive QC page) — Plotly Technologies Inc. Collaborative data science. Montréal (2015). https://plot.ly
+
+Methods used by the options added in 0.3.0:
+
+* **Stain vectors estimated per slide** (`--stain_vectors slide`) — Macenko M. et al. A method for normalizing histology slides for quantitative analysis. *IEEE ISBI*, 1107–1110 (2009). The H&E-only image (`rgb_he`) uses the colour-deconvolution model of Ruifrok & Johnston (2001), above.

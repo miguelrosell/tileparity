@@ -14,15 +14,21 @@
 | `<id>.mask_compare.png`, `.tsv` | with `--mask_compare`: the mask used next to the other methods and finer resolutions; per mask: Otsu threshold, tissue share, Dice overlap with the mask used, tiles gained and lost, agreement with Space Ranger's tissue call |
 | `<id>.prepare.json` | every pixel-size candidate and the value used (`native`), scale factor, image sizes, thumbnail scale factors (`fullres_to_thumbnail`), mask method and threshold, spatial-unit checks, tile counts (`n_extract`, `n_keep`) and drop reasons, all parameters; `"status": "skipped"` when a scale would need upsampling |
 
+## `<sample>/mpp<scale>/channels/` — the input images of both extractors (Process 1b)
+
+* `<id>.channels.json`: the input sets of each extractor, the bands of the channels image, the stain vectors (`stain_vectors`: method `slide` or `standard`, H, E and R = H × E in optical density, the angle between H and E and to the standard vectors, the number of stained pixels used, the share of their squared optical density in the H–E plane, and a `note` when the standard vectors had to be used or H and E are poorly separated), the H/E mapping and the share of pixels above it, and the `rgb_he` summary (median, 90th-percentile and largest share of optical density removed per tile; median change of R, G, B).
+* `<id>.rgb_he_qc.png`: the slide next to its version rebuilt from H and E only, how much each pixel changed (white = unchanged, darkest = 40 levels or more), and the tiles with the median, 90th-percentile and largest change.
+* `<id>.rgb_he_qc.tsv`: per extracted tile, `residual_share` (share of its optical density that `rgb_he` removes), `mean_abs_change` (mean change of R, G and B, in levels of 255) and `changed_fraction` (share of pixels where R, G or B moves by more than 10 levels).
+* `<id>.channels.tif` (with `--publish_images`): the channels image, 8 bits per band, bands in the order listed in `channels.json` (H, E; R, G, B for fastLBP's `rgb`; R_he, G_he, B_he = `rgb_he`).
+
 ## `<sample>/mpp<scale>/uni2h/` — Output2a
 
-`<id>.uni2h.h5`: `/tile_id` (n), `/blocks/UNI2H/X` (n × 1536, float32), `/blocks/UNI2H/columns`; attributes record the model source, weights checksum, precision and normalisation.
+`<id>.uni2h.h5`: `/tile_id` (n) and one block per input set, `/blocks/UNI2H_RGB/X` and `/blocks/UNI2H_RGB_HE/X` (n × 1536, float32; columns `uni2h_rgb_0000`… and `uni2h_rgb_he_0000`…); attributes record the model source, weights checksum, precision, normalisation, the input set and, for `rgb_he`, the stain vectors.
 
 ## `<sample>/mpp<scale>/lbp/` — Output2b
 
-* `<id>.lbp.h5`: `/tile_id` and one block per channel, `/blocks/LBP_<channel>/X` (n × 1145 raw counts with the default radii; channels H, E, GREY, R, G, B as requested by `--lbp_channels`; columns named `<channel>_r<R>_p<P>_u<code>`), with `--lbp_center` also `/blocks/LBP_CENTER_<channel>/X` (mean code vector of the central 2 × 2 pixels), and `/blocks/INTENSITY_HE/X` (n × 10). The exports group the channels into sets: `LBP_HE` (H then E), `LBP_GREY`, `LBP_RGB` (R, G, B).
+* `<id>.lbp.h5`: `/tile_id` and one block per channel, `/blocks/LBP_<channel>/X` (n × 1145 raw counts with the default radii; channels R, G, B, R_HE, G_HE, B_HE, H, E as requested by `--lbp_channels`; columns named `<channel>_r<R>_p<P>_u<code>`), with `--lbp_center` also `/blocks/LBP_CENTER_<channel>/X` (mean code vector of the central 2 × 2 pixels), and `/blocks/INTENSITY_HE/X` (n × 10). The exports group the channels into input sets: `LBP_RGB` (R, G, B), `LBP_RGB_HE` (R_he, G_he, B_he) and `LBP_HE` (H then E).
 * `<id>.lbp_qc.png`, `.tsv`: the share of each tile's pixels with an irregular pattern, per channel and radius (mean, 10th, 50th and 90th percentile over the extracted tiles).
-* `<id>.channels.json`: the channels written, the H/E mapping and how many pixels were clipped.
 
 ## `<sample>/mpp<scale>/st/` — Output3
 
@@ -30,8 +36,8 @@
 
 ## `export/mpp<scale>/`
 
-* `spe/<id>.rds` and `spe/combined_mpp<scale>.rds` — SpatialExperiment: `assay(spe, "counts")`, `colData(spe)` (tile table of the extracted tiles), `spatialCoords(spe)` (tile centres, full-resolution px), `reducedDims(spe)` (`UNI2H`, `LBP_HE`, `LBP_GREY`, `LBP_RGB`, `LBP_CENTER_*`, `INTENSITY_HE`, those computed), `imgData(spe)` (thumbnail), `metadata(spe)$tileparity` (provenance and `lineage`, JSON text).
-* `anndata/<id>.h5ad` and `anndata/combined_mpp<scale>.h5ad` — AnnData: `X` (tiles × genes counts, int32 or float32), `obs` (tile table), `obsm` (`X_uni2h`, `X_lbp_he`, `X_lbp_grey`, `X_lbp_rgb`, `X_lbp_center_*`, `X_intensity_he`, `spatial`), `uns["spatial"]` (thumbnail and scale factor, compatible with `scanpy.pl.spatial`), `uns["tileparity"]` (column names, provenance, `lineage`).
+* `spe/<id>.rds` and `spe/combined_mpp<scale>.rds` — SpatialExperiment: `assay(spe, "counts")`, `colData(spe)` (tile table of the extracted tiles), `spatialCoords(spe)` (tile centres, full-resolution px), `reducedDims(spe)` (`UNI2H_RGB`, `UNI2H_RGB_HE`, `LBP_RGB`, `LBP_RGB_HE`, `LBP_HE`, `LBP_CENTER_*`, `INTENSITY_HE`, those computed), `imgData(spe)` (thumbnail), `metadata(spe)$tileparity` (provenance — including `channels`, the content of `channels.json` with the stain vectors — and `lineage`, JSON text).
+* `anndata/<id>.h5ad` and `anndata/combined_mpp<scale>.h5ad` — AnnData: `X` (tiles × genes counts, int32 or float32), `obs` (tile table), `obsm` (`X_uni2h_rgb`, `X_uni2h_rgb_he`, `X_lbp_rgb`, `X_lbp_rgb_he`, `X_lbp_he`, `X_lbp_center_*`, `X_intensity_he`, `spatial`), `uns["spatial"]` (thumbnail and scale factor, compatible with `scanpy.pl.spatial`), `uns["tileparity"]` (column names, provenance, `lineage`).
 * `*.lineage.json` — the lineage of each object, including the checksum of the object file.
 
 Both formats hold the same content. To write only one, add `--skip_anndata` or `--skip_spe`; [anndataR](https://bioconductor.org/packages/release/bioc/html/anndataR.html) converts between them (e.g. read an `.h5ad` in R as a SpatialExperiment), which may be the lighter option for large datasets.
@@ -39,8 +45,9 @@ Both formats hold the same content. To write only one, add `--skip_anndata` or `
 ```r
 spe <- readRDS("results/export/mpp0.5000/spe/combined_mpp0.5000.rds")
 spe <- spe[, spe$keep]                     # the default analysis set
-uni <- reducedDim(spe, "UNI2H")            # tiles x 1536
-lbp <- reducedDim(spe, "LBP_HE") / 50176   # LBP frequencies (224 x 224 px tiles)
+uni <- reducedDim(spe, "UNI2H_RGB")        # tiles x 1536, UNI2-h on the slide
+uni_he <- reducedDim(spe, "UNI2H_RGB_HE")  # tiles x 1536, UNI2-h on the slide rebuilt from H and E only
+lbp <- reducedDim(spe, "LBP_RGB") / 50176  # LBP frequencies (224 x 224 px tiles), R then G then B
 ```
 
 ## `qc/mpp<scale>/`

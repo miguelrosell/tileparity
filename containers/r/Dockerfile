@@ -1,4 +1,4 @@
-# Build:  docker build -t ghcr.io/miguelrosell/tileparity-r:0.2.0 containers/r
+# Build:  docker build -t ghcr.io/miguelrosell/tileparity-r:0.3.0 containers/r
 # The same environment.yml is used by -profile conda, so both routes install the same software.
 FROM mambaorg/micromamba:2.0.5
 COPY --chown=$MAMBA_USER:$MAMBA_USER environment.yml /tmp/environment.yml

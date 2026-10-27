@@ -30,22 +30,43 @@ Yes: a `mask` column in the samplesheet with an image of the whole slide (any re
 
 ## What each extractor receives
 
+**Do UNI2-h and fastLBP receive the same images?**
+Yes. Process 1b computes the input images once, and each extractor reads the same ones, in input sets (`--uni2h_inputs`, `--lbp_channels`, both `rgb,rgb_he` by default):
+
+* `rgb`: the resampled slide as it is;
+* `rgb_he`: the same slide rebuilt from haematoxylin and eosin only — every pixel's colour replaced by the closest colour made of the two stains;
+* `he` (fastLBP only, off by default): the amounts of H and of E as two single-channel images.
+
+UNI2-h reads each set as an RGB image; fastLBP computes one LBP per channel of it (R, G, B; R_he, G_he, B_he; H, E). Each set gives its own blocks (`UNI2H_RGB`, `UNI2H_RGB_HE`, `LBP_RGB`, `LBP_RGB_HE`, `LBP_HE`), so the two extractors can be compared on identical input, and `rgb` with `rgb_he` within each extractor.
+
 **What exactly does fastLBP receive (Input2b)?**
-An image, not precomputed features: a tiled TIFF with one 8-bit band (0–255) per channel requested by `--lbp_channels` (default H, E and grey; optionally R, G, B), computed pixel by pixel from the resampled RGB image, plus the tile table. `FASTLBP_EXTRACT` reads each extracted tile together with a margin, so border pixels are compared with their real neighbours. It then computes the LBP codes and the histograms with fastLBP's kernel ([lbp.md](lbp.md)).
+An image, not precomputed features: a tiled TIFF with one 8-bit band (0–255) per channel (H and E always, R, G, B for `rgb`, R_he, G_he, B_he for `rgb_he`; the order is in `channels.json`), computed pixel by pixel from the resampled RGB image, plus the tile table. `FASTLBP_EXTRACT` reads each extracted tile together with a margin, so border pixels are compared with their real neighbours. It then computes the LBP codes and the histograms of the channels of the chosen input sets with fastLBP's kernel ([lbp.md](lbp.md)).
 
 **What exactly does UNI2-h receive (Input2a)?**
-The resampled RGB image plus the tile table. Each extracted tile is processed as follows:
+For `rgb` the resampled RGB image, for `rgb_he` the bands R_he, G_he, B_he of the channels image, plus the tile table. Each extracted tile is processed as follows:
 
-1. It is cut as 224 × 224 px with three values per pixel (R, G, B).
+1. It is cut as 224 × 224 px with three values per pixel.
 2. The values are scaled to [0, 1] and normalised with the ImageNet mean and standard deviation, giving a tensor of shape [3, 224, 224].
 
-Tiles are processed in batches, and the output is one 1536-dimensional vector per tile.
+Tiles are processed in batches, and the output is one 1536-dimensional vector per tile and input set.
+
+**What does `rgb_he` remove, and how do I check it?**
+The part of each pixel's colour that two stains cannot explain: pen marks, pigment, the tint of the glass or of the scanner, noise. Technically, the optical density of each pixel is projected onto the plane spanned by the slide's H and E colours ([design.md](design.md#the-input-images-of-both-extractors-1b)). On real H&E it is a few percent of the optical density, and R, G, B move by 1–3 levels of 255 on average; strongly red blood cells can lose part of their red. `channels/<id>.rgb_he_qc.png` shows the slide, its rebuilt version and where it changed, and `rgb_he_qc.tsv` has the numbers per tile.
+
+**Why not give UNI2-h the H and E channels themselves?**
+UNI2-h takes exactly three channels (its first layer embeds 14 × 14 px patches of R, G and B) and was trained on ordinary RGB H&E images. H, E and a third channel as an image would look like nothing it has seen. `rgb_he` contains only H and E information but is still an ordinary-looking H&E image, so UNI2-h can read it, and fastLBP reads exactly the same pixels.
+
+**Where do the H and E colours come from?**
+By default each slide's own (`--stain_vectors slide`): estimated from about a million pixels of its extracted tiles with the method of Macenko et al. (2009), because stain colours vary between laboratories and scanners. `--stain_vectors standard` uses Ruifrok and Johnston's published vectors for every slide. The vectors used are in `channels.json`, in the caption of the QC figure and in the lineage.
+
+**What happened to the grey channel?**
+It was removed in tileparity 0.3. Grey is a fixed mixture of R, G and B (0.299, 0.587, 0.114, tuned to human brightness perception) that UNI2-h has no counterpart for, and its information is contained in R, G and B. `--lbp_channels grey` stops with a message.
 
 **Do I have to set the patch size?**
 No. `--tile_px 224` is the default and the same for both extractors (UNI2-h needs 224). The physical size of a tile follows from the scale: 64, 112 and 224 µm at 0.2857, 0.5 and 1.0 µm/px.
 
 **Where is the background (glass) removed? Is there a bounding box?**
-In Process 1, not in the adapters 1a/1b, which only change how pixels are represented. A tissue mask (by default saturation + Otsu on a 4 µm/px thumbnail; `--mask_method grey` or `od`, or your own mask) gives every tile a tissue fraction. Features are computed for tiles with at least `--min_tissue_extract` tissue (column `extract`), and tiles with at least `--min_tissue` (50 %) are `keep`, the default set for analysis. The image is not cropped, for two reasons: background tiles are simply not used, and keeping the original frame keeps Space Ranger's coordinates valid. `--mask_compare` shows how much the other methods and finer resolutions would change.
+In Process 1, not in Process 1b or the adapters, which only change how pixels are represented. A tissue mask (by default saturation + Otsu on a 4 µm/px thumbnail; `--mask_method grey` or `od`, or your own mask) gives every tile a tissue fraction. Features are computed for tiles with at least `--min_tissue_extract` tissue (column `extract`), and tiles with at least `--min_tissue` (50 %) are `keep`, the default set for analysis. The image is not cropped, for two reasons: background tiles are simply not used, and keeping the original frame keeps Space Ranger's coordinates valid. `--mask_compare` shows how much the other methods and finer resolutions would change.
 
 ## Spatial transcriptomics
 

@@ -6,13 +6,13 @@ This page explains, from the beginning, how `FASTLBP_EXTRACT` turns a tile into 
 
 ## 1. The input: one number per pixel
 
-LBP compares numbers, so it works on a single-channel image: one value from 0 to 255 per pixel. A colour image has three numbers per pixel, so Process 1b first computes single-channel images from the same RGB pixels (`--lbp_channels`, channel sets):
+LBP compares numbers, so it works on a single-channel image: one value from 0 to 255 per pixel. A colour image has three numbers per pixel, so LBP is computed on each channel of the image separately. The images are the **input sets** that UNI2-h reads too (`--lbp_channels`; Process 1b computes them once, see [design.md](design.md#the-input-images-of-both-extractors-1b)):
 
 | set | channels | what a high value means |
 |---|---|---|
-| `he` (default) | H (haematoxylin) and E (eosin), by colour deconvolution | more of that stain (H: nuclei; E: cytoplasm, stroma) |
-| `grey` (default) | grey = 0.299 R + 0.587 G + 0.114 B | brighter |
-| `rgb` | R, G and B separately | more red, green or blue light |
+| `rgb` (default) | R, G and B of the slide | more red, green or blue light |
+| `rgb_he` (default) | R_he, G_he and B_he: R, G and B of the slide rebuilt from haematoxylin and eosin only | the same, without the colour that is neither H nor E |
+| `he` (optional) | H (haematoxylin) and E (eosin) amounts, by colour deconvolution | more of that stain (H: nuclei; E: cytoplasm, stroma) |
 
 Every channel is processed on its own, in exactly the same way. The rest of this page follows one channel.
 
@@ -71,7 +71,7 @@ The threshold U ≤ 2 is the same for every P. It does not count points; it asks
 ### 2.7 What the codes mean
 
 * **0**: every neighbour is lower than the centre: c is a local peak (in the H channel: a spot with more haematoxylin than its surroundings).
-* **P**: every neighbour is at least as high as the centre: c is a local pit, *or the area is flat* (equal values count as "at least as high"). Glass is nearly flat in the H and E channels (white to light-grey glass gives E = 0 and H a small, almost constant value, from 0 to about 10 out of 255), so much of it gets code P; scanner noise makes the rest irregular.
+* **P**: every neighbour is at least as high as the centre: c is a local pit, *or the area is flat* (equal values count as "at least as high"). Glass is nearly flat (bright and almost constant in R, G and B; in the H and E channels E = 0 and H a small, almost constant value, from 0 to about 10 out of 255), so much of it gets code P; scanner noise makes the rest irregular.
 * **1 … P − 1**: an arc of higher neighbours on one side and lower on the other: an edge or a corner; the code says how wide the higher arc is.
 * **P + 1**: anything more complicated (noise, fine or crossing structures).
 
@@ -91,14 +91,14 @@ For a pixel near the edge of the tile, part of its circle lies outside the tile.
 
 What would cutting the tile out alone change? fastLBP, like scikit-image, gives the value 0 to points outside the image. [`scripts/border_effect.py`](../scripts/border_effect.py) measures it on five 224 px tiles of a real stained section (scikit-image's immunohistochemistry image):
 
-| R | pixels whose circle leaves the tile | codes changed, grey / H | histogram change, grey / H |
+| R | pixels whose circle leaves the tile | codes changed, R / H | histogram change, R / H |
 |---|---|---|---|
 | 1 | 1.8 % | 1.3 % / 1.3 % | 0.7 % / 0.6 % |
-| 8 | 13.8 % | 4.1 % / 3.9 % | 2.3 % / 2.3 % |
-| 19 | 31.1 % | 4.1 % / 3.8 % | 2.7 % / 2.8 % |
-| 45 | 64.2 % | 5.4 % / 3.0 % | 4.6 % / 2.3 % |
+| 8 | 13.8 % | 3.9 % / 3.9 % | 2.3 % / 2.3 % |
+| 19 | 31.1 % | 3.6 % / 3.8 % | 2.6 % / 2.8 % |
+| 45 | 64.2 % | 4.5 % / 3.0 % | 3.9 % / 2.3 % |
 
-("Histogram change" is the total-variation distance between the two normalised histograms: the share of pixels that would have to move to another bin to turn one histogram into the other.) Far fewer codes change than circles leave the tile because, at large radii, most patterns are irregular with or without the real neighbours: at R = 45, 96 % of the pixels of these tiles are irregular (grey channel), and 90 % of the border pixels are irregular both with the real neighbours and with zeros outside. Small as it is, the change is not random noise: the part of the circle outside the tile always reads "lower than the centre", so it biases the border pixels of every tile in the same direction. That is why tileparity uses the real context: with the margin the codes are exactly those of a whole-slide computation.
+("Histogram change" is the total-variation distance between the two normalised histograms: the share of pixels that would have to move to another bin to turn one histogram into the other.) Far fewer codes change than circles leave the tile because, at large radii, most patterns are irregular with or without the real neighbours: at R = 45, 96 % of the pixels of these tiles are irregular (R channel), and 92 % of the border pixels are irregular both with the real neighbours and with zeros outside. Small as it is, the change is not random noise: the part of the circle outside the tile always reads "lower than the centre", so it biases the border pixels of every tile in the same direction. That is why tileparity uses the real context: with the margin the codes are exactly those of a whole-slide computation.
 
 ## 4. Thirteen radii: 1145 numbers per channel
 
@@ -120,11 +120,11 @@ One radius sees structures of one size. tileparity uses 13 radii, fastLBP's prog
 | 34 | 214 | 216 | 860 |
 | 45 | 283 | 285 | **1145** |
 
-1145 is not a multiple of 13 because every radius has a different number of points, so a different P + 2. Columns are named `<channel>_r<R>_p<P>_u<code>`, e.g. `H_r1_p7_u8` is the irregular bin of radius 1 in the H channel. A channel set puts its channels side by side: `LBP_HE` has 2 × 1145 = 2290 columns (H, then E), `LBP_GREY` 1145 and `LBP_RGB` 3435. Channel sets are alternatives to compare, never concatenated with each other.
+1145 is not a multiple of 13 because every radius has a different number of points, so a different P + 2. Columns are named `<channel>_r<R>_p<P>_u<code>`, e.g. `R_r1_p7_u8` is the irregular bin of radius 1 in the R channel and `R_he_r1_p7_u8` the same bin in the R channel of the rebuilt image. An input set puts its channels side by side: `LBP_RGB` and `LBP_RGB_HE` have 3 × 1145 = 3435 columns each (R, G, B), `LBP_HE` 2 × 1145 = 2290 (H, then E). Input sets are alternatives to compare, never concatenated with each other.
 
 ## 5. Things to keep in mind when using the vector
 
-1. **The irregular share grows with the radius.** More points on the circle means more chances for the arc to break. On the five tiles measured above (grey channel) 5 % of the pixels are irregular at R = 1, 74 % at R = 8, 90 % at R = 19 and 96 % at R = 45; how much this holds for your slides is what the QC figure below shows. A radius at which nearly every pixel is irregular puts almost all of its P + 2 numbers into one bin and adds little information. `lbp/<id>.lbp_qc.png` (and `.tsv`) shows this share for every channel and radius of every sample, so the useful radii can be chosen on real data (`--lbp_radii`, `--lbp_npoints`).
+1. **The irregular share grows with the radius.** More points on the circle means more chances for the arc to break. On the five tiles measured above (R channel) 6 % of the pixels are irregular at R = 1, 76 % at R = 8, 91 % at R = 19 and 96 % at R = 45; how much this holds for your slides is what the QC figure below shows. A radius at which nearly every pixel is irregular puts almost all of its P + 2 numbers into one bin and adds little information. `lbp/<id>.lbp_qc.png` (and `.tsv`) shows this share for every channel and radius of every sample, so the useful radii can be chosen on real data (`--lbp_radii`, `--lbp_npoints`).
 2. **The blocks of the vector do not weigh the same.** A raw concatenation gives large radii more columns, and a few bins dominate: in the test run (synthetic slide, 9 radii up to 14 px), the 9 irregular bins, 2.5 % of the 362 columns of a channel, carry 35–54 % of the variance, depending on channel and scale. Before computing distances or a PCA, use proportions (divide by 50 176), take square roots (the Hellinger transform, so that a few large bins do not dominate) and give each radius and channel the same total weight (multiple factor analysis: divide each block by the square root of its largest eigenvalue). The optional 3-D UMAP QC (`--qc_umap`) uses exactly this recipe; the files store the raw counts so that any other choice remains possible.
 3. **LBP ignores how much stain there is.** Adding a constant to every value, or any change that keeps the order of values, gives the same bits. The `INTENSITY_HE` block stores what LBP throws away: the mean, standard deviation and 10th, 50th and 90th percentiles of H and of E (10 numbers per tile). It is a separate block, not part of the 1145 or 2290 numbers.
 

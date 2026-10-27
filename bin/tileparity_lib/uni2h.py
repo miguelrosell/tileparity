@@ -1,6 +1,12 @@
 """Processes 1a + 2a - UNI2-h adapter and embedding.
 
-Adapter (1a), applied to each tile exactly as read from the resampled image:
+Input sets (``--uni2h_inputs``, the same names as fastLBP's, see :mod:`tileparity_lib.channels`):
+
+* ``rgb``    - tiles of the resampled RGB image (block ``UNI2H_RGB``);
+* ``rgb_he`` - tiles of the same image rebuilt from haematoxylin and eosin only, the bands
+  R_he, G_he, B_he of the channels image of Process 1b (block ``UNI2H_RGB_HE``).
+
+Adapter (1a), applied to each tile exactly as read from its image:
 
 1. the tile is cut at (x0, y0) with side 224 px - no resizing, no cropping;
 2. pixel values are scaled to [0, 1] (divide by 255);
@@ -80,15 +86,33 @@ def sha256(path: str, chunk: int = 1 << 24) -> str:
     return h.hexdigest()
 
 
-class TileDataset:
-    """Reads RGB tiles from the resampled image; the libvips handle is opened lazily in
-    each data-loader worker."""
+INPUT_DESCRIPTION = {
+    "rgb": "tiles of the resampled RGB image",
+    "rgb_he": "tiles of the resampled image rebuilt from haematoxylin and eosin only (bands R_he, G_he, B_he of "
+              "the channels image of Process 1b)",
+}
 
-    def __init__(self, image_path: str, tiles: pd.DataFrame, tile_px: int):
+
+def block_name(input_set: str) -> str:
+    return f"UNI2H_{input_set.upper()}"
+
+
+def columns(input_set: str) -> list[str]:
+    return [f"uni2h_{input_set}_{i:04d}" for i in range(EMBED_DIM)]
+
+
+class TileDataset:
+    """Reads 3-band tiles (``bands``: their indices in the image; default the first three)
+    from an image; the libvips handle is opened lazily in each data-loader worker."""
+
+    def __init__(self, image_path: str, tiles: pd.DataFrame, tile_px: int, bands: list[int] | None = None):
         self.image_path = image_path
         self.x0 = tiles["x0_px"].to_numpy(int)
         self.y0 = tiles["y0_px"].to_numpy(int)
         self.tile_px = tile_px
+        self.bands = list(bands) if bands is not None else [0, 1, 2]
+        if len(self.bands) != 3:
+            raise ValueError(f"UNI2-h reads 3-band images, got bands {self.bands}")
         self._img = None
 
     def __len__(self) -> int:
@@ -104,7 +128,7 @@ class TileDataset:
             self._img = pyvips.Image.new_from_file(self.image_path, access="random")
         from .image import read_region
 
-        rgb = read_region(self._img, int(self.x0[i]), int(self.y0[i]), self.tile_px, self.tile_px)[:, :, :3]
+        rgb = read_region(self._img, int(self.x0[i]), int(self.y0[i]), self.tile_px, self.tile_px)[:, :, self.bands]
         if rgb.shape != (224, 224, 3):
             raise ValueError(f"UNI2-h needs 224x224x3 tiles, got {rgb.shape}")
         x = torch.from_numpy(np.ascontiguousarray(rgb)).permute(2, 0, 1).float().div_(255.0)
@@ -121,7 +145,10 @@ def embed(
     precision: str = "fp16",
     batch_size: int = 32,
     num_workers: int = 4,
+    bands: list[int] | None = None,
 ) -> tuple[np.ndarray, dict]:
+    """Class token of every tile of ``image_path`` (``bands``: the 3 bands read, see
+    :class:`TileDataset`)."""
     import torch
 
     if device == "auto":
@@ -132,7 +159,7 @@ def embed(
     if device == "cpu" and dtype is torch.float16:
         dtype = None  # half precision on CPU is slow and poorly supported
     model = model.to(device).eval()
-    dataset = TileDataset(image_path, tiles, 224)
+    dataset = TileDataset(image_path, tiles, 224, bands)
     loader = torch.utils.data.DataLoader(
         dataset,
         batch_size=batch_size,

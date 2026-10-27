@@ -3,8 +3,8 @@
 One interactive HTML page per scale (plotly; it can be rotated, zoomed and hovered, and
 works offline) with one 3-D UMAP per view, coloured by sample or by a QC column:
 
-* ``UNI2H``: columns standardised (z-scores), then PCA.
-* ``LBP_HE``, ``LBP_GREY``, ``LBP_RGB``: the analysis recipe for LBP histograms. Each
+* ``UNI2H_RGB``, ``UNI2H_RGB_HE``: columns standardised (z-scores), then PCA.
+* ``LBP_RGB``, ``LBP_RGB_HE``, ``LBP_HE``: the analysis recipe for LBP histograms. Each
   radius block of each channel is turned into proportions (divided by the tile's pixel
   count, so it sums to 1), square-rooted (Hellinger transform, so that a few large bins
   such as the irregular one do not dominate distances), and divided by the square root
@@ -26,8 +26,13 @@ import re
 import numpy as np
 import pandas as pd
 
-COLUMN_RE = re.compile(r"^(?:center_)?(?P<ch>[A-Za-z]+)_r(?P<r>\d+)_p(?P<p>\d+)_u(?P<u>\d+)$")
-LBP_VIEWS = ("LBP_HE", "LBP_GREY", "LBP_RGB")
+# LBP column names: <channel>_r<R>_p<P>_u<code>, e.g. R_r3_p19_u4 or R_he_r3_p19_u4
+COLUMN_RE = re.compile(r"^(?:center_)?(?P<ch>[A-Za-z][A-Za-z_]*?)_r(?P<r>\d+)_p(?P<p>\d+)_u(?P<u>\d+)$")
+UNI2H_VIEWS = ("UNI2H_RGB", "UNI2H_RGB_HE")
+LBP_VIEWS = ("LBP_RGB", "LBP_RGB_HE", "LBP_HE")
+VIEW_INPUT = {"UNI2H_RGB": "the slide", "UNI2H_RGB_HE": "the slide rebuilt from H and E only",
+              "LBP_RGB": "R, G, B of the slide", "LBP_RGB_HE": "R, G, B of the slide rebuilt from H and E only",
+              "LBP_HE": "the H and E amounts"}
 
 
 def lbp_recipe(X: np.ndarray, columns, tile_px: int) -> np.ndarray:
@@ -108,17 +113,19 @@ def views(samples: list[dict]) -> dict:
     obs = pd.concat([tile_table(s) for s in samples], ignore_index=True)
     out = {}
     names = set.intersection(*(set(s["blocks"]) for s in samples)) if samples else set()
-    if "UNI2H" in names:
-        X = np.vstack([s["blocks"]["UNI2H"][0] for s in samples]).astype(float)
-        sd = X.std(axis=0)
-        sd[sd == 0] = 1
-        out["UNI2H"] = ((X - X.mean(axis=0)) / sd, "UNI2-h class token, z-scored", obs)
+    for v in UNI2H_VIEWS:
+        if v in names:
+            X = np.vstack([s["blocks"][v][0] for s in samples]).astype(float)
+            sd = X.std(axis=0)
+            sd[sd == 0] = 1
+            out[v] = ((X - X.mean(axis=0)) / sd, f"UNI2-h class token of {VIEW_INPUT[v]}, z-scored", obs)
     for v in LBP_VIEWS:
         if v in names:
             tile_px = int(obs["tile_px"].iloc[0])
             X = np.vstack([s["blocks"][v][0] for s in samples])
             out[v] = (lbp_recipe(X, samples[0]["blocks"][v][1], tile_px),
-                      "LBP histograms: proportions, Hellinger, equal weight per radius and channel", obs)
+                      f"LBP histograms of {VIEW_INPUT[v]}: proportions, Hellinger, equal weight per radius and "
+                      "channel", obs)
     with_genes = [s for s in samples if s["counts"].shape[0] > 0]
     if with_genes:
         genes = sorted(set.intersection(*(set(map(str, s["gene_ids"])) for s in with_genes)))

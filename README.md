@@ -2,12 +2,14 @@
 
 **Harmonised H&E tiling so that a foundation model (UNI2-h), a classical texture descriptor (fastLBP) and spatial transcriptomics all describe exactly the same pieces of tissue.**
 
-Comparing image feature extractors is only fair if they see the same pixels. `tileparity` makes every geometric decision once — pixel size, tissue mask, tile grid, assignment of Visium / Visium HD units to tiles — and then feeds the same tiles to each extractor and to the expression aggregation. The result is one object per sample (SpatialExperiment and AnnData) in which every column/row is a tile with its UNI2-h embedding, its LBP histograms and its gene counts, and with the record of every step that produced it.
+Comparing image feature extractors is only fair if they see the same pixels. `tileparity` makes every geometric decision once — pixel size, tissue mask, tile grid, assignment of Visium / Visium HD units to tiles — computes the input images once, and then feeds the same tiles of the same images to each extractor and to the expression aggregation. The result is one object per sample (SpatialExperiment and AnnData) in which every column/row is a tile with its UNI2-h embeddings, its LBP histograms and its gene counts, and with the record of every step that produced it.
 
 ```
 Input1 --[1 PREPARE]--> Output1 = Input2 (resampled image, tile table, unit->tile assignment)
-                           |-- [1a+2a UNI2H_EMBED] -------------------> Output2a  tiles x 1536
-                           |-- [1b LBPCHANNELS] -> [2b FASTLBP_EXTRACT] -> Output2b  tiles x 1145 per channel (+ intensity)
+                           |-- [1b CHANNELS] --------------------------> the input sets: rgb (the slide) and
+                           |                                             rgb_he (the slide rebuilt from H and E only)
+                           |-- [1a+2a UNI2H_EMBED] (rgb, rgb_he) ------> Output2a  tiles x 1536 per input set
+                           |-- [2b FASTLBP_EXTRACT] (rgb, rgb_he) -----> Output2b  tiles x 1145 per channel (+ intensity)
                            |-- [3 AGGREGATEST] ------------------------> Output3   genes x tiles
                            |-- [4 EXPORTSPE / EXPORTANNDATA] ----------> SpatialExperiment (.rds), AnnData (.h5ad)
                            '-- [QCUMAP] (optional) --------------------> interactive 3-D UMAP of every view
@@ -16,12 +18,22 @@ Input1 --[1 PREPARE]--> Output1 = Input2 (resampled image, tile table, unit->til
 | Process | Module | What it does |
 |---|---|---|
 | 1 | `TILEPARITY_PREPARE` | Resamples the slide to each target µm/px, detects tissue (saturation, grey or optical density + Otsu, or your own mask), lays the tile grid (or centres tiles on Visium spots), computes QC, decides which tiles are extracted and kept, assigns spatial units to tiles (Visium spots by area share). **The only step that makes geometric decisions.** |
-| 1a + 2a | `UNI2H_EMBED` | Cuts each 224 × 224 px tile (no resize), normalises it as in the UNI2-h model card and returns the 1536-d class token. |
-| 1b | `TILEPARITY_LBPCHANNELS` | Computes the LBP channels pixel by pixel from the same RGB image: haematoxylin and eosin (colour deconvolution), grey, and optionally R, G, B. |
-| 2b | `FASTLBP_EXTRACT` | Uniform LBP histograms per tile and channel with fastLBP's kernel (13 radii, 1–45 px), using the real neighbouring pixels; H/E intensity statistics; a QC figure of irregular patterns per radius. |
+| 1b | `TILEPARITY_CHANNELS` | Computes the input images of both extractors once, pixel by pixel from the resampled image: the slide rebuilt from haematoxylin and eosin only (`rgb_he`), with H and E colours estimated on each slide (Macenko), the H and E amounts and the R, G, B channels; a QC figure of what `rgb_he` changes. |
+| 1a + 2a | `UNI2H_EMBED` | For each input set, cuts each 224 × 224 px tile (no resize), normalises it as in the UNI2-h model card and returns the 1536-d class token. |
+| 2b | `FASTLBP_EXTRACT` | Uniform LBP histograms per tile and channel of each input set with fastLBP's kernel (13 radii, 1–45 px), using the real neighbouring pixels; H/E intensity statistics; a QC figure of irregular patterns per radius. |
 | 3 | `TILEPARITY_AGGREGATEST` | Expression per tile: the sum of the Visium HD bins inside each tile, or the Visium spots split between the tiles they touch (multinomially, by area share). |
 | 4 | `TILEPARITY_EXPORTSPE`, `TILEPARITY_EXPORTANNDATA` | One object per sample and one combined object per scale, with their lineage. |
-| QC | `TILEPARITY_QCUMAP` | With `--qc_umap`: one interactive page per scale with a 3-D UMAP of UNI2-h, each LBP channel set and expression. |
+| QC | `TILEPARITY_QCUMAP` | With `--qc_umap`: one interactive page per scale with a 3-D UMAP of UNI2-h and LBP on each input set, and of expression. |
+
+### The same images for both extractors
+
+| input set | the image | UNI2-h | fastLBP |
+|---|---|---|---|
+| `rgb` (default) | the slide as it is | `UNI2H_RGB` | `LBP_RGB`: one LBP per channel R, G, B |
+| `rgb_he` (default) | the slide rebuilt from haematoxylin and eosin only: every pixel's colour replaced by the closest colour made of the two stains, so the colour that is neither H nor E (pen, pigment, a tint of the glass or the scanner) is removed | `UNI2H_RGB_HE` | `LBP_RGB_HE`: one LBP per channel R_he, G_he, B_he |
+| `he` (optional) | the amounts of H and of E | — (UNI2-h needs three channels) | `LBP_HE` |
+
+Comparing `rgb` with `rgb_he` shows how much each extractor relies on colour that is neither H nor E; comparing the extractors on the same set compares them on identical pixels. [docs/design.md](docs/design.md#the-input-images-of-both-extractors-1b) explains how `rgb_he` is computed.
 
 Documentation:
 
@@ -53,13 +65,21 @@ The container images are built from [`containers/`](containers) by GitHub Action
 
 ## Running on the UZH server (SLURM)
 
+Without containers (conda in your own folder; the whole run is one SLURM job, inside which Nextflow runs every task on the node):
+
 ```bash
-# from the login node; pick the software route that is available
+# inside an sbatch job with 64 CPUs, 400 GB and the GPU (docs/rolandgarros.md has the job script)
+nextflow run ./tileparity -profile conda,gpu --max_cpus 64 --max_memory '400.GB' --input ... --outdir ...
+```
+
+With Apptainer, from the login node, every task as its own SLURM job:
+
+```bash
 nextflow run miguelrosell/tileparity -r main -profile uzh_rolandgarros,apptainer --input ... --outdir ... \
     --slurm_queue <partition> --slurm_gpu_options '--gres=gpu:1'
 ```
 
-`conf/uzh_rolandgarros.config` holds what is specific to that machine (executor, resource ceilings, GPU request). Partitions and sbatch options are parameters (`--slurm_queue`, `--slurm_gpu_queue`, `--slurm_options`, `--slurm_gpu_options`), so nothing needs editing; `sinfo -o "%P %G"` lists the partitions and their GPUs. [docs/rolandgarros.md](docs/rolandgarros.md) walks through the first run.
+`conf/uzh_rolandgarros.config` holds what is specific to that machine (executor, resource ceilings, GPU request). Partitions and sbatch options are parameters (`--slurm_queue`, `--slurm_gpu_queue`, `--slurm_options`, `--slurm_gpu_options`), so nothing needs editing; `sinfo -o "%P %G"` lists the partitions and their GPUs. [docs/rolandgarros.md](docs/rolandgarros.md) walks through the first run step by step (conda route).
 
 ## Samplesheet
 
@@ -88,7 +108,9 @@ Relative paths are resolved against the samplesheet's folder. See [`assets/sampl
 | `--hd_bin_um` | `8` | Visium HD bin size summed per tile |
 | `--visium_tiling` | `grid` | standard Visium / HEST: `grid` (spots split by area) or `spot` (tiles centred on spots) |
 | `--visium_split` | `multinomial` | how a spot's molecules are split between grid tiles: `multinomial` or `fraction` |
-| `--lbp_channels` | `he,grey` | LBP channel sets: `he`, `grey`, `rgb` |
+| `--uni2h_inputs` | `rgb,rgb_he` | UNI2-h input sets: `rgb`, `rgb_he` |
+| `--lbp_channels` | `rgb,rgb_he` | fastLBP input sets: `rgb`, `rgb_he`, `he` |
+| `--stain_vectors` | `slide` | H and E colours: estimated on each slide (`slide`) or the published ones (`standard`) |
 | `--lbp_center` | `false` | also store the LBP codes of the tiles' central pixels |
 | `--qc_umap` | `false` | interactive 3-D UMAP of every feature view per scale |
 | `--uni2h_weights` | — | local UNI2-h weights (recommended); otherwise downloaded with `HF_TOKEN` |
@@ -101,8 +123,9 @@ All parameters are listed with comments in [`nextflow.config`](nextflow.config).
 ```
 results/
 ├── <sample>/mpp<scale>/prepare/   tile table, unit→tile assignment, thumbnail, mask, overlay, tissue thresholds, [mask comparison], prepare.json
+├── <sample>/mpp<scale>/channels/  channels.json (bands, stain vectors), rgb_he_qc.png/.tsv
 ├── <sample>/mpp<scale>/uni2h/     <id>.uni2h.h5      (Output2a)
-├── <sample>/mpp<scale>/lbp/       <id>.lbp.h5        (Output2b), lbp_qc.png, channels.json
+├── <sample>/mpp<scale>/lbp/       <id>.lbp.h5        (Output2b), lbp_qc.png
 ├── <sample>/mpp<scale>/st/        <id>.counts.h5     (Output3), per-tile summary
 ├── export/mpp<scale>/spe/         <id>.rds + combined_mpp<scale>.rds
 ├── export/mpp<scale>/anndata/     <id>.h5ad + combined_mpp<scale>.h5ad
@@ -125,13 +148,13 @@ nextflow run . -profile test,docker    # end to end on the synthetic slide
 
 ## Extending
 
-A new extractor is one module that reads `[meta, resampled.tif, tiles.tsv.gz, prepare.lineage.json]` and writes `<id>.<name>.h5` in the layout of `bin/tileparity_lib/features.py` and a lineage file (`bin/tileparity_lib/lineage.py`); add it to `subworkflows/local/tileparity/main.nf` next to `UNI2H_EMBED` and to the export join. Nothing in Process 1 changes.
+A new extractor is one module that reads `[meta, resampled.tif, tiles.tsv.gz, prepare.lineage.json]` (and, for the input set `rgb_he`, the channels image and `channels.json` of Process 1b) and writes `<id>.<name>.h5` in the layout of `bin/tileparity_lib/features.py` and a lineage file (`bin/tileparity_lib/lineage.py`); add it to `subworkflows/local/tileparity/main.nf` next to `UNI2H_EMBED` and to the export join. Nothing in Process 1 changes.
 
 ## Status and roadmap
 
-Version 0.2.0 (changes in [CHANGELOG.md](CHANGELOG.md)). What has been run so far:
+Version 0.3.0 (changes in [CHANGELOG.md](CHANGELOG.md)). What has been run so far:
 
-* the Python library: 77 unit tests, including LBP histograms identical to fastLBP's whole-image run;
+* the Python library: 86 unit tests, including LBP histograms identical to fastLBP's whole-image run and the H&E-only image against a direct computation;
 * the whole workflow on the synthetic test data without containers, with every option of the test profile switched on and both exports (AnnData; SpatialExperiment with R 4.3 / SpatialExperiment 1.12), with Nextflow 25.04.0 and 26.10.3; stub runs with 25.04.0, 25.04.7, 26.04.7 and 26.10.3, and `nextflow lint` without errors with 25.04.7, 26.04.7 and 26.10.3 (the linter of 25.04.0 wrongly reports `meta` as undefined in `conf/modules.config`);
 * GitHub Actions: `CI` runs the unit tests, a stub run with the oldest supported and the latest Nextflow, and lint with the latest, on every push; `Containers` builds the three images and runs the test profile inside them in Docker.
 
@@ -139,7 +162,7 @@ The GPU path (CUDA) has not been run yet; the first real run on a GPU machine wi
 
 Not yet implemented:
 
-* stain normalisation (e.g. Macenko) as an option;
+* stain normalisation to reference colours as an option (the H and E colours are already estimated per slide in Process 1b);
 * an input mode for pre-tiled image collections such as NCT-CRC-HE-100K;
 * cell-level units (segmented nuclei) as a third tiling mode;
 * the analysis layer (comparing and integrating the views) — planned in `analysis/` after the first real run.

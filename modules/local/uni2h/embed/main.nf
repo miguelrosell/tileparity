@@ -1,5 +1,6 @@
 // Processes 1a + 2a - UNI2-h adapter (cut 224 px tiles, ImageNet normalisation, no resize)
-// and embedding (1536-d class token per tile).
+// and embedding (1536-d class token per tile), one block per input set: the resampled image
+// (rgb) and the image rebuilt from H and E only (rgb_he, from the channels image of Process 1b).
 process UNI2H_EMBED {
     tag "${meta.id}"
     label 'process_gpu'
@@ -8,7 +9,7 @@ process UNI2H_EMBED {
     container "${params.container_uni2h}"
 
     input:
-    tuple val(meta), path(image), path(tiles), path(lineage)
+    tuple val(meta), path(image), path(tiles), path(lineage), path(channels), path(channels_json), path(channels_lineage)
     path weights
 
     output:
@@ -19,6 +20,7 @@ process UNI2H_EMBED {
     def args = task.ext.args ?: ''
     prefix = task.ext.prefix ?: "${meta.id}"
     def weights_arg = weights ? "--weights ${weights}" : ''
+    def channels_arg = channels ? "--channels-image ${channels} --channels-json ${channels_json} --lineage-parent ${channels_lineage}" : ''
     def workers = Math.max(0, (task.cpus as int) - 1)
     """
     export VIPS_CONCURRENCY=1
@@ -30,6 +32,7 @@ process UNI2H_EMBED {
         --num-workers ${workers} \\
         --process ${task.process} \\
         --lineage-parent ${lineage} \\
+        ${channels_arg} \\
         ${weights_arg} \\
         ${args}
 

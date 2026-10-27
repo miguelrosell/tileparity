@@ -57,14 +57,14 @@ def test_extract_matches_single_tile_computation(tmp_path):
     import pandas as pd
 
     tiles = pd.DataFrame({"x0_px": [T, 2 * T, 0], "y0_px": [T, T, 0]})  # last tile touches the border
-    spec = lbp.LbpSpec(radii=[1, 3], npoints=[8, 19], channels=["H", "grey"], tile_px=T)
+    spec = lbp.LbpSpec(radii=[1, 3], npoints=[8, 19], channels=["H", "R_he"], tile_px=T, bands=["H", "E", "R_he"])
     out = lbp.extract(str(path), tiles, spec, ncpus=2, batch_size=1)
     pad = spec.pad
     for i, (x0, y0) in enumerate(zip(tiles["x0_px"], tiles["y0_px"])):
         padded = np.pad(bands, ((pad, pad), (pad, pad), (0, 0)), mode="reflect")
         crop = padded[y0 : y0 + T + 2 * pad, x0 : x0 + T + 2 * pad]
         np.testing.assert_array_equal(out["H"][i], lbp.tile_histograms(crop[:, :, 0], spec, y0, x0))
-        np.testing.assert_array_equal(out["grey"][i], lbp.tile_histograms(crop[:, :, 2], spec, y0, x0))
+        np.testing.assert_array_equal(out["R_he"][i], lbp.tile_histograms(crop[:, :, 2], spec, y0, x0))
     assert out["intensity"].shape == (3, 10)
 
 
@@ -107,14 +107,15 @@ def test_irregular_fractions_read_the_last_bin_of_each_radius():
     np.testing.assert_allclose(lbp.irregular_fractions(hist, spec), [[0.25, 0.5]])
 
 
-def test_extract_with_channel_sets_and_center(tmp_path):
+def test_extract_with_input_sets_and_center(tmp_path):
     from tileparity_lib import channels
 
     T = 32
     rng = np.random.default_rng(7)
     rgb = rng.integers(0, 256, size=(3 * T, 3 * T, 3), dtype=np.uint8)
-    bands = channels.band_order(["he", "rgb"])
-    assert bands == ["H", "E", "R", "G", "B"]
+    sets = ["rgb", "rgb_he", "he"]
+    bands = channels.band_order(sets)
+    assert bands == ["H", "E", "R", "G", "B", "R_he", "G_he", "B_he"]
     arr = channels.rgb_to_channels_numpy(rgb, 0.3, 0.15, bands)
     path = tmp_path / "channels.tif"
     write_tiled_tiff(pyvips.Image.new_from_array(arr).copy(interpretation="multiband"), path, compression="deflate",
@@ -122,13 +123,16 @@ def test_extract_with_channel_sets_and_center(tmp_path):
     import pandas as pd
 
     tiles = pd.DataFrame({"x0_px": [T], "y0_px": [T]})
-    spec = lbp.LbpSpec(radii=[1, 2], npoints=[7, 13], channels=channels.lbp_channels(["he", "rgb"]), tile_px=T,
-                       bands=bands, center=True)
+    chans = channels.lbp_channels(sets)
+    assert chans == ["R", "G", "B", "R_he", "G_he", "B_he", "H", "E"]
+    spec = lbp.LbpSpec(radii=[1, 2], npoints=[7, 13], channels=chans, tile_px=T, bands=bands, center=True)
     out = lbp.extract(str(path), tiles, spec, ncpus=1)
-    assert set(out) == {"H", "E", "R", "G", "B", "center_H", "center_E", "center_R", "center_G", "center_B",
-                        "intensity"}
+    assert set(out) == {*chans, *(f"center_{c}" for c in chans), "intensity"}
     pad = spec.pad
     crop = arr[T - pad : 2 * T + pad, T - pad : 2 * T + pad]
     np.testing.assert_array_equal(out["G"][0], lbp.tile_histograms(np.ascontiguousarray(crop[:, :, 3]), spec, T, T))
-    # the R/G/B channels are exactly the RGB values UNI2-h reads
-    np.testing.assert_array_equal(arr[:, :, 2:], rgb)
+    np.testing.assert_array_equal(out["B_he"][0], lbp.tile_histograms(np.ascontiguousarray(crop[:, :, 7]), spec, T, T))
+    # the R/G/B channels are exactly the RGB values UNI2-h reads, R_he/G_he/B_he the image UNI2-h reads as rgb_he
+    np.testing.assert_array_equal(arr[:, :, 2:5], rgb)
+    np.testing.assert_array_equal(arr[:, :, 5:8], channels.rgb_he_numpy(rgb))
+    assert [lbp.block_name(c) for c in ("R_he", "H")] == ["LBP_R_HE", "LBP_H"]

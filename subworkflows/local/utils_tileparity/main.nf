@@ -49,10 +49,23 @@ def validateParams() {
     if (!((params.hd_bin_um as int) in [2, 8, 16])) {
         error("--hd_bin_um ${params.hd_bin_um}: Space Ranger writes bins of 2, 8 or 16 µm")
     }
-    def sets = params.lbp_channels.toString().toLowerCase().tokenize(',')*.trim().findAll { s -> s }
-    if (!params.skip_lbp && (!sets || (sets - ['he', 'grey', 'rgb']))) {
-        error("--lbp_channels '${params.lbp_channels}': use a comma-separated subset of the channel sets he, grey, rgb " +
-              "(tileparity >= 0.2 names channel sets: 'he' = H and E, 'grey', 'rgb' = R, G and B)")
+    def sets = inputSets(params.lbp_channels)
+    if (!params.skip_lbp && 'grey' in sets) {
+        error("--lbp_channels '${params.lbp_channels}': the grey channel set was removed in tileparity 0.3; " +
+              "use rgb (R, G, B of the slide) and rgb_he (R, G, B of the slide rebuilt from H and E only)")
+    }
+    if (!params.skip_lbp && (!sets || (sets - ['rgb', 'rgb_he', 'he']))) {
+        error("--lbp_channels '${params.lbp_channels}': use a comma-separated subset of the input sets rgb, rgb_he, he " +
+              "('rgb' = R, G, B of the slide; 'rgb_he' = R, G, B of the slide rebuilt from H and E only; " +
+              "'he' = the H and E amounts)")
+    }
+    def inputs = inputSets(params.uni2h_inputs)
+    if (!params.skip_uni2h && (!inputs || (inputs - ['rgb', 'rgb_he']))) {
+        error("--uni2h_inputs '${params.uni2h_inputs}': use a comma-separated subset of the input sets rgb, rgb_he " +
+              "('rgb' = the slide; 'rgb_he' = the slide rebuilt from H and E only)")
+    }
+    if (!(params.stain_vectors in ['slide', 'standard'])) {
+        error("--stain_vectors must be slide (estimated on each slide) or standard (Ruifrok & Johnston's fixed vectors)")
     }
     def minTissue = params.min_tissue as Double
     if (!(minTissue >= 0 && minTissue <= 1)) {
@@ -88,6 +101,10 @@ def validateParams() {
     if (params.uni2h_test_mode && !params.skip_uni2h) {
         log.warn("UNI2-h TEST MODE: embeddings come from a random 1-block network and are meaningless")
     }
+}
+
+def inputSets(value) {
+    return (value ?: '').toString().toLowerCase().tokenize(',')*.trim().findAll { s -> s && s != 'none' }
 }
 
 // Columns of the tile table; samplesheet metadata columns must not reuse these names
@@ -204,7 +221,8 @@ def summaryText(int nSamples, List scales) {
     scales      : ${scales.collect { s -> "${s} µm/px (tile ${String.format(Locale.ROOT, '%.1f', s * params.tile_px)} µm)" }.join(', ')}
     tissue      : mask '${params.mask_method}' at ${params.mask_mpp} µm/px; features from >= ${extract}, keep >= ${params.min_tissue}${params.mask_compare ? '; mask comparison on' : ''}
     visium      : ${params.visium_tiling} tiling${params.visium_tiling == 'grid' ? ", spots split by area (${params.visium_split})" : ''}
-    extractors  : ${[params.skip_uni2h ? null : 'UNI2-h' + (params.uni2h_test_mode ? ' [TEST MODE]' : ''), params.skip_lbp ? null : "fastLBP (${params.lbp_channels}${params.lbp_center ? ', + centre' : ''})"].findAll().join(', ')}
+    extractors  : ${[params.skip_uni2h ? null : "UNI2-h (${params.uni2h_inputs})" + (params.uni2h_test_mode ? ' [TEST MODE]' : ''), params.skip_lbp ? null : "fastLBP (${params.lbp_channels}${params.lbp_center ? ', + centre' : ''})"].findAll().join(', ')}
+    stains      : H and E vectors ${params.stain_vectors == 'slide' ? 'estimated on each slide (Macenko)' : 'standard (Ruifrok & Johnston)'}
     exports     : ${[params.skip_spe ? null : 'SpatialExperiment', params.skip_anndata ? null : 'AnnData', params.qc_umap ? '3-D UMAP QC' : null].findAll().join(', ')}
     gpu         : ${params.use_gpu}
     outdir      : ${params.outdir}

@@ -5,6 +5,7 @@
 #   <prefix>.tiles.tsv.gz    tile table from Process 1 (the extracted tiles are exported; column
 #                            `keep` marks those that pass every QC threshold)
 #   <prefix>.prepare.json    provenance and thumbnail scale factor
+#   <prefix>.channels.json   input images of the extractors: bands, stain vectors, rgb_he QC (optional)
 #   <prefix>.thumbnail.png   low-resolution image for imgData()
 #   <prefix>.uni2h.h5        Output2a  (optional)
 #   <prefix>.lbp.h5          Output2b  (optional)
@@ -15,7 +16,8 @@
 #   assay "counts"     genes x tiles (sum of Visium HD bins, Visium spots split by area, or the spot)
 #   colData            the tile table (QC metrics, sample metadata, ...)
 #   spatialCoords      tile centre in full-resolution pixels (pxl_col_in_fullres, pxl_row_in_fullres)
-#   reducedDims        UNI2H (1536), LBP_HE, LBP_GREY, LBP_RGB, LBP_CENTER_*, INTENSITY_HE (those computed)
+#   reducedDims        UNI2H_RGB, UNI2H_RGB_HE (1536 each), LBP_RGB, LBP_RGB_HE, LBP_HE, LBP_CENTER_*,
+#                      INTENSITY_HE (those computed)
 #   imgData            the thumbnail, with its scale factor to full-resolution pixels
 #   metadata$tileparity provenance (parameters, model, LBP radii, ...) and the lineage (JSON text)
 
@@ -57,11 +59,13 @@ NUMERIC_COLUMNS <- c("scale_mpp", "tile_px", "tile_um", "row", "col", "x0_px", "
                      "cx_fullres", "cy_fullres", "cx_um", "cy_um", "tissue_fraction", "st_coverage",
                      "n_st_units", "st_units_equiv", "lapvar", "pen_fraction", "dark_fraction")
 BOOL_COLUMNS <- c("inside_image", "blur_flag", "pen_flag", "dark_flag", "extract", "keep")
-# blocks of one channel set are joined; different channel sets stay separate alternatives
+# blocks of one input set are joined; different input sets stay separate alternatives
 COMBINED_BLOCKS <- list(
-    LBP_HE = c("LBP_H", "LBP_E"), LBP_GREY = "LBP_GREY", LBP_RGB = c("LBP_R", "LBP_G", "LBP_B"),
-    LBP_CENTER_HE = c("LBP_CENTER_H", "LBP_CENTER_E"), LBP_CENTER_GREY = "LBP_CENTER_GREY",
-    LBP_CENTER_RGB = c("LBP_CENTER_R", "LBP_CENTER_G", "LBP_CENTER_B"), INTENSITY_HE = "INTENSITY_HE"
+    LBP_RGB = c("LBP_R", "LBP_G", "LBP_B"), LBP_RGB_HE = c("LBP_R_HE", "LBP_G_HE", "LBP_B_HE"),
+    LBP_HE = c("LBP_H", "LBP_E"),
+    LBP_CENTER_RGB = c("LBP_CENTER_R", "LBP_CENTER_G", "LBP_CENTER_B"),
+    LBP_CENTER_RGB_HE = c("LBP_CENTER_R_HE", "LBP_CENTER_G_HE", "LBP_CENTER_B_HE"),
+    LBP_CENTER_HE = c("LBP_CENTER_H", "LBP_CENTER_E"), INTENSITY_HE = "INTENSITY_HE"
 )
 
 # Same typing rules as tileparity_lib.tiling.read_tiles(): numbers, booleans, everything else text
@@ -175,9 +179,10 @@ build_spe <- function(dir, prefix) {
 
     rd <- list()
     provenance <- list(prepare = prep)
+    if (file.exists(f(".channels.json"))) provenance$channels <- fromJSON(f(".channels.json"), simplifyVector = FALSE)
     if (file.exists(f(".uni2h.h5"))) {
         u <- read_features(f(".uni2h.h5"), tile_ids)
-        rd$UNI2H <- u$blocks$UNI2H
+        for (name in names(u$blocks)) rd[[name]] <- u$blocks[[name]]  # UNI2H_RGB, UNI2H_RGB_HE
         provenance$uni2h <- u$attrs
     }
     if (file.exists(f(".lbp.h5"))) {

@@ -1,5 +1,6 @@
-// Process 2b - LBP histograms per tile with fastLBP's LBP kernel (+ H/E intensity statistics,
-// optional central-pixel block and the irregular-pattern QC figure).
+// Process 2b - LBP histograms per tile with fastLBP's LBP kernel, one block per channel of the
+// chosen input sets (+ H/E intensity statistics, optional central-pixel block and the
+// irregular-pattern QC figure).
 process FASTLBP_EXTRACT {
     tag "${meta.id}"
     label 'process_high'
@@ -8,7 +9,7 @@ process FASTLBP_EXTRACT {
     container "${params.container_python}"
 
     input:
-    tuple val(meta), path(channels), path(lineage), path(tiles)
+    tuple val(meta), path(channels), path(channels_json), path(lineage), path(tiles)
 
     output:
     tuple val(meta), path("${prefix}.lbp.h5"), path("${prefix}.lbp.lineage.json"), emit: features
@@ -21,6 +22,7 @@ process FASTLBP_EXTRACT {
     """
     tp_extract_lbp.py \\
         --channels-image ${channels} \\
+        --channels-json ${channels_json} \\
         --tiles ${tiles} \\
         --prefix ${prefix} \\
         --ncpus ${task.cpus} \\

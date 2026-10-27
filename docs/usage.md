@@ -47,10 +47,12 @@ Useful options:
 * `--skip_uni2h` / `--skip_lbp` — run one branch only.
 * `--mask_compare` — compare the tissue mask with the other methods and finer resolutions (`prepare/<id>.mask_compare.png`).
 * `--min_tissue_extract 0.3` — compute features from 30 % tissue on (`keep` still uses `--min_tissue`), to compare thresholds later without rerunning.
-* `--lbp_channels he,grey,rgb` — add the R, G, B channel set; `--lbp_center` — add the central-pixel LBP blocks.
+* `--lbp_channels rgb,rgb_he,he` — add LBP on the H and E amounts to the default input sets; `--lbp_center` — add the central-pixel LBP blocks.
+* `--uni2h_inputs rgb` — UNI2-h on the slide only, not on its H&E-only version (half the GPU time).
+* `--stain_vectors standard` — the same published H and E colours for every slide instead of each slide's own.
 * `--qc_umap` — write an interactive 3-D UMAP of every feature view per scale (`qc/`).
 * `--visium_tiling spot` — spot-centred tiles for every standard Visium / HEST sample; `--visium_split fraction` — split spots by expected value instead of multinomially.
-* `--publish_images` — also keep the resampled and channel images (large).
+* `--publish_images` — also keep the resampled and channels images (large).
 * `-profile debug` — keep work directories and print host names.
 
 The first real run on the UZH server is described step by step in [rolandgarros.md](rolandgarros.md).
@@ -61,4 +63,4 @@ Create `conf/<site>.config` modelled on `conf/uzh_rolandgarros.config` (executor
 
 ## Resources (orientation)
 
-Per sample at 0.5 µm/px (at most ≈3 400 tiles of 112 µm for a 6.5 × 6.5 mm Visium HD capture area), LBP takes roughly 2 CPU-seconds per tile and channel with the default 13 radii, i.e. a few minutes on 64 cores or about an hour on 8; the 0.2857 µm/px scale has about three times more tiles. UNI2-h needs about 0.35 TFLOP per tile (ViT-H/14, 681 M parameters), i.e. in fp16 roughly a hundred tiles per second on an NVIDIA L4 and a few tens on a laptop RTX 3070 (estimates). The resampled image is written to the work directory (about 3 GB per sample at 0.5 µm/px, uncompressed equivalent). These are estimates; the first real run will give measured times in `pipeline_info/execution_report_*.html`.
+Per sample at 0.5 µm/px (at most ≈3 400 tiles of 112 µm for a 6.5 × 6.5 mm Visium HD capture area), LBP takes roughly 2 CPU-seconds per tile and channel with the default 13 radii; the default input sets have 6 channels (R, G, B of `rgb` and of `rgb_he`), i.e. about 10 minutes on 64 cores or 1.5 hours on 8; the 0.2857 µm/px scale has about three times more tiles. UNI2-h needs about 0.35 TFLOP per tile and input set (ViT-H/14, 681 M parameters), i.e. in fp16 roughly a hundred tiles per second on an NVIDIA L4 and a few tens on a laptop RTX 3070 (estimates); the two default input sets double that time. The resampled image is written to the work directory (about 3 GB per sample at 0.5 µm/px, uncompressed equivalent). These are estimates; the first real run will give measured times in `pipeline_info/execution_report_*.html`.

@@ -22,15 +22,16 @@ from .tiling import read_tiles
 
 log = logging.getLogger(__name__)
 
-# blocks in lbp.h5 / uni2h.h5  ->  name in the exported objects (blocks of one channel set
-# are joined; different channel sets stay separate alternatives)
+# blocks in lbp.h5  ->  name in the exported objects (the channels of one input set are
+# joined; different input sets stay separate alternatives). The blocks of uni2h.h5
+# (UNI2H_RGB, UNI2H_RGB_HE) are exported as they are.
 COMBINED_BLOCKS = {
-    "LBP_HE": ("LBP_H", "LBP_E"),
-    "LBP_GREY": ("LBP_GREY",),
     "LBP_RGB": ("LBP_R", "LBP_G", "LBP_B"),
-    "LBP_CENTER_HE": ("LBP_CENTER_H", "LBP_CENTER_E"),
-    "LBP_CENTER_GREY": ("LBP_CENTER_GREY",),
+    "LBP_RGB_HE": ("LBP_R_HE", "LBP_G_HE", "LBP_B_HE"),
+    "LBP_HE": ("LBP_H", "LBP_E"),
     "LBP_CENTER_RGB": ("LBP_CENTER_R", "LBP_CENTER_G", "LBP_CENTER_B"),
+    "LBP_CENTER_RGB_HE": ("LBP_CENTER_R_HE", "LBP_CENTER_G_HE", "LBP_CENTER_B_HE"),
+    "LBP_CENTER_HE": ("LBP_CENTER_H", "LBP_CENTER_E"),
     "INTENSITY_HE": ("INTENSITY_HE",),
 }
 LINEAGE_STEPS = ("uni2h", "lbp", "st", "prepare")
@@ -55,6 +56,9 @@ def load_sample(directory: str | Path, prefix: str) -> dict:
     prep = json.loads((d / f"{prefix}.prepare.json").read_text())
     blocks: dict[str, tuple[np.ndarray, np.ndarray]] = {}
     provenance: dict = {"prepare": prep}
+    channels_path = d / f"{prefix}.channels.json"
+    if channels_path.exists():  # input images of the extractors: bands, stain vectors, rgb_he QC
+        provenance["channels"] = json.loads(channels_path.read_text())
 
     def aligned(path: Path, label: str) -> dict:
         ids, blks, attrs = features.read(str(path))

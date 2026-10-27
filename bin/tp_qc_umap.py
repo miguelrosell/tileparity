@@ -45,13 +45,15 @@ def main(argv=None):
         rows.append(pd.DataFrame({"tile_id": vobs["tile_id"].to_numpy(), "view": view, "umap1": coords[:, 0],
                                   "umap2": coords[:, 1], "umap3": coords[:, 2]}))
     caption = {
-        "What it shows": ("For every feature view of this scale (UNI2-h, each LBP channel set, expression), a 3-D UMAP "
-                          f"of the {len(obs)} extracted tiles of {len(prefixes)} sample(s). Use the menu to colour the "
-                          "points by sample, keep, tissue fraction, blur flag or total counts; drag to rotate."),
+        "What it shows": ("For every feature view of this scale (UNI2-h and LBP on each input set: rgb = the slide, "
+                          "rgb_he = the slide rebuilt from H and E only, he = the H and E amounts; expression), a 3-D "
+                          f"UMAP of the {len(obs)} extracted tiles of {len(prefixes)} sample(s). Use the menu to colour "
+                          "the points by sample, keep, tissue fraction, blur flag or total counts; drag to rotate."),
         "How to read it": ("Points close together have similar features. Samples that form separate islands in a view "
                            "while the tissue types are shared suggest a batch effect in that view; isolated groups "
                            "that coincide with blur_flag, keep = False or low tissue fraction point to technical "
-                           "artefacts rather than biology."),
+                           "artefacts rather than biology. A batch effect seen with rgb but not with rgb_he points to "
+                           "colour that is neither H nor E (scanner tint, pigment, pen)."),
         "Caveats": ("UMAP preserves local neighbourhoods but distorts distances: the size of a group and the gap "
                     "between groups mean nothing. With few tiles the layout is unstable. This is a quick QC look; "
                     "quantitative comparisons belong to the analysis (variance budget)."),

@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.3.0 (2026-10-27)
+
+Both extractors now read the same images. Agreed before the first run on real data.
+
+**Input sets: the same pixels for UNI2-h and fastLBP (Process 1b)**
+
+* Process 1b is now `TILEPARITY_CHANNELS` (was `TILEPARITY_LBPCHANNELS`; step `channels` in the lineage, outputs in `<sample>/mpp<scale>/channels/`). It computes every input image of both extractors once, pixel by pixel from the resampled image, so the two extractors read exactly the same pixels.
+* Input sets, with the same names for both extractors: `rgb` (the slide as it is) and `rgb_he` (the slide rebuilt from haematoxylin and eosin only: each pixel's optical density projected onto the plane of the two stain colours, i.e. without the colour that is neither H nor E). `--uni2h_inputs` (new, default `rgb,rgb_he`) gives the blocks `UNI2H_RGB` and `UNI2H_RGB_HE`; `--lbp_channels` (default now `rgb,rgb_he`) gives `LBP_RGB` (R, G, B) and `LBP_RGB_HE` (R_he, G_he, B_he). `he` (the H and E amounts, `LBP_HE`) remains available for fastLBP and is off by default.
+* **Removed:** the `grey` channel set (`--lbp_channels grey` stops with a message). **Renamed:** the UNI2-h block `UNI2H` is now `UNI2H_RGB` (columns `uni2h_rgb_0000`, …; `obsm["X_uni2h_rgb"]`).
+* Stain vectors per slide (`--stain_vectors slide`, default): estimated with the method of Macenko et al. (2009) from about a million pixels of each slide's extracted tiles, with the standard vectors (Ruifrok & Johnston, `--stain_vectors standard`) as an option and as the fallback when a slide's estimate is not reliable. On real H&E the slides' own vectors left 1–4 % of the optical density outside the H–E plane, the standard ones 5–22 %. The `he` channels and the intensity block use the same vectors.
+* `channels/<id>.rgb_he_qc.png` and `.tsv`: the slide next to its H&E-only version, how much each pixel changed, the tiles with the median, 90th-percentile and largest change, and the share of optical density removed per tile. `channels.json` records the bands, the stain vectors (also in the lineage and in the exported objects' provenance) and the summary.
+* UNI2-h embeds each input set separately (two input sets take twice the GPU time).
+
+**Other changes**
+
+* The exports carry `channels.json` in their provenance (`metadata(spe)$tileparity$channels`, `uns["tileparity"]["provenance"]`), and the 3-D UMAP QC has one view per extractor and input set.
+* `scripts/border_effect.py` measures the R channel instead of grey (numbers in `docs/lbp.md` updated).
+* `docs/rolandgarros.md`: the conda route for servers without containers (Miniforge, one SLURM job, local executor).
+* Container images 0.3.0.
+
 ## 0.2.0 (2026-10-24)
 
 Changes discussed and agreed before the first run on real data.

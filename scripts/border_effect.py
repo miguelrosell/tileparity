@@ -38,11 +38,11 @@ ORIGINS = [(46, 46), (46, 242), (242, 46), (242, 242), (140, 140)]  # top-left c
 
 
 def channels() -> dict:
+    """The R channel (as in the input sets rgb and rgb_he) and a haematoxylin channel."""
     rgb = data.immunohistochemistry()
-    grey = np.round(color.rgb2gray(rgb) * 255).astype(np.uint8)
     h = color.rgb2hed(rgb)[..., 0]
     h = np.round(np.clip((h - h.min()) / (np.percentile(h, 99.9) - h.min()), 0, 1) * 255).astype(np.uint8)
-    return {"grey": grey, "H": h}
+    return {"R": np.ascontiguousarray(rgb[..., 0]), "H": h}
 
 
 def main() -> None:

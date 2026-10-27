@@ -35,7 +35,8 @@ def _sample(name, n_tiles, genes, rng):
     tiles = pd.DataFrame({"tile_id": [f"{name}_{i}" for i in range(n_tiles)], "sample_id": name, "tile_px": 10,
                           "cx_um": 0.0, "cy_um": 0.0, "tissue_fraction": 1.0, "keep": True, "blur_flag": False})
     counts = sparse.csc_matrix(rng.poisson(3, (len(genes), n_tiles)))
-    return {"tiles": tiles, "blocks": {"UNI2H": (rng.normal(size=(n_tiles, 4)), [f"f{i}" for i in range(4)])},
+    return {"tiles": tiles, "blocks": {"UNI2H_RGB": (rng.normal(size=(n_tiles, 4)), [f"f{i}" for i in range(4)]),
+                                       "UNI2H_RGB_HE": (rng.normal(size=(n_tiles, 4)), [f"g{i}" for i in range(4)])},
             "counts": counts, "gene_ids": genes}
 
 
@@ -45,8 +46,9 @@ def test_expression_view_leaves_out_image_only_samples():
                _sample("img", 6, [], rng)]
     data = qcumap.views(samples)
     assert len(data["obs"]) == 15
-    X, note, obs = data["views"]["UNI2H"]
+    X, note, obs = data["views"]["UNI2H_RGB"]
     assert X.shape == (15, 4) and len(obs) == 15
+    assert "rebuilt from H and E only" in data["views"]["UNI2H_RGB_HE"][1]
     E, note, obs = data["views"]["EXPRESSION"]
     assert E.shape == (9, 2)  # the 9 tiles of a and b, on their shared genes g2 and g3
     assert set(obs["sample_id"]) == {"a", "b"} and "1 image-only sample(s) left out" in note
@@ -64,6 +66,12 @@ def test_embedding_and_page():
     obs = pd.DataFrame({"tile_id": [f"t{i}" for i in range(60)], "sample_id": ["a"] * 30 + ["b"] * 30,
                         "cx_um": 0.0, "cy_um": 0.0, "tissue_fraction": 1.0, "keep": True, "blur_flag": False})
     fig = qcumap.figure(coords, obs, "test")
-    html = qcumap.page([("UNI2H", qcumap.to_html(fig, True), "note")], "title",
+    html = qcumap.page([("UNI2H_RGB", qcumap.to_html(fig, True), "note")], "title",
                        {"What it shows": "w", "How to read it": "h", "Caveats": "c", "Where it comes from": "s"})
     assert "Where it comes from" in html and "plotly" in html.lower()
+
+
+def test_lbp_columns_of_channels_with_underscores_stay_apart():
+    cols = [f"{c}_r1_p7_u{u}" for c in ("R", "R_he", "center_B_he") for u in range(9)]
+    keys = [qcumap.COLUMN_RE.match(c).group("ch") for c in cols]
+    assert keys == ["R"] * 9 + ["R_he"] * 9 + ["B_he"] * 9

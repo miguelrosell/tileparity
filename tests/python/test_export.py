@@ -11,7 +11,7 @@ def _adata(sample, n_tiles, genes):
                        index=[f"{sample}_{i}" for i in range(n_tiles)])
     X = sparse.csr_matrix(np.ones((n_tiles, len(genes)), dtype=np.int32))
     a = ad.AnnData(X=X, obs=obs, var=pd.DataFrame(index=genes))
-    a.obsm["X_uni2h"] = np.zeros((n_tiles, 4), np.float32)
+    a.obsm["X_uni2h_rgb"] = np.zeros((n_tiles, 4), np.float32)
     return a
 
 
@@ -25,4 +25,4 @@ def test_image_only_samples_are_left_out_of_the_combined_object():
 def test_single_expression_sample_gives_image_only_combination():
     combined = export.combine_anndata([_adata("a", 3, ["g1"]), _adata("img", 2, [])])
     assert combined.n_obs == 5 and combined.n_vars == 0
-    assert combined.obsm["X_uni2h"].shape == (5, 4)
+    assert combined.obsm["X_uni2h_rgb"].shape == (5, 4)

@@ -7,7 +7,7 @@ feature extractors (:mod:`tileparity_lib.uni2h`, :mod:`tileparity_lib.lbp`) and 
 the expression aggregation (:mod:`tileparity_lib.st`).
 """
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 
 def setup_logging(level: str = "INFO") -> None:
