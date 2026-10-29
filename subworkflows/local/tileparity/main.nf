@@ -9,6 +9,7 @@
 //                              |-- [2b FASTLBP_EXTRACT] (channels) --> Output2b (LBP per channel)
 //                              |-- [1a+2a UNI2H_EMBED] (rgb, rgb_he) -> Output2a (tiles x 1536 per set)
 //                              |-- [3 AGGREGATEST] ------------------> Output3 (genes x tiles)
+//                              |-- [CLUSTER] (optional, per slide) --> clusters of every view, ARI between views
 //                              |-- [4 EXPORTSPE / EXPORTANNDATA] ----> SpatialExperiment, AnnData
 //                              '-- [QCUMAP] (optional) --------------> 3-D UMAP of every view
 //
@@ -26,6 +27,7 @@ include { TILEPARITY_AGGREGATEST   } from '../../../modules/local/tileparity/agg
 include { TILEPARITY_EXPORTANNDATA } from '../../../modules/local/tileparity/exportanndata/main'
 include { TILEPARITY_EXPORTSPE     } from '../../../modules/local/tileparity/exportspe/main'
 include { TILEPARITY_QCUMAP        } from '../../../modules/local/tileparity/qcumap/main'
+include { TILEPARITY_CLUSTER       } from '../../../modules/local/tileparity/cluster/main'
 
 workflow TILEPARITY {
     take:
@@ -98,8 +100,8 @@ workflow TILEPARITY {
     TILEPARITY_AGGREGATEST(ch_tiles.join(TILEPARITY_PREPARE.out.assignment).join(ch_spatial).join(ch_lineage))
     ch_versions = ch_versions.mix(TILEPARITY_AGGREGATEST.out.versions.first())
 
-    // ---- Process 4: export, one task per scale with all samples ------------------------------
-    ch_bundle = ch_tiles
+    // ---- every output of one sample and scale -------------------------------------------------
+    ch_sample = ch_tiles
         .join(TILEPARITY_PREPARE.out.json)
         .join(TILEPARITY_PREPARE.out.thumbnail)
         .join(ch_lineage)
@@ -108,10 +110,24 @@ workflow TILEPARITY {
         .join(TILEPARITY_AGGREGATEST.out.counts)
         .join(ch_channels_report)
         .map { meta, tiles, json, thumb, prep_lineage, uni, uni_lineage, lbp, lbp_lineage, counts, st_lineage, channels_report ->
-            [meta.scale_tag, [tiles, json, thumb, prep_lineage, uni, uni_lineage, lbp, lbp_lineage, counts, st_lineage, channels_report].flatten()]
+            [meta, [tiles, json, thumb, prep_lineage, uni, uni_lineage, lbp, lbp_lineage, counts, st_lineage, channels_report].flatten()]
         }
-        .groupTuple()
-        .map { tag, files -> [[id: "combined_mpp${tag}", scale_tag: tag], files.flatten()] }
+
+    // ---- optional: clustering of every view, per slide and scale ------------------------------------
+    ch_clusters = channel.empty()
+    ch_sample_export = ch_sample
+    if (params.cluster) {
+        TILEPARITY_CLUSTER(ch_sample)
+        ch_clusters = TILEPARITY_CLUSTER.out.agreement
+        ch_versions = ch_versions.mix(TILEPARITY_CLUSTER.out.versions.first())
+        // the exports add the Leiden labels of the set keep to the tile table
+        ch_sample_export = ch_sample
+            .join(TILEPARITY_CLUSTER.out.labels)
+            .map { meta, files, labels, cluster_lineage -> [meta, files + [labels, cluster_lineage]] }
+    }
+
+    // ---- Process 4: export, one task per scale with all samples ------------------------------
+    ch_bundle = byScale(ch_sample_export)
 
     ch_h5ad = channel.empty()
     if (!params.skip_anndata) {
@@ -129,7 +145,7 @@ workflow TILEPARITY {
     // ---- optional QC: 3-D UMAP of every view, one page per scale -------------------------------
     ch_umap = channel.empty()
     if (params.qc_umap) {
-        TILEPARITY_QCUMAP(ch_bundle)
+        TILEPARITY_QCUMAP(byScale(ch_sample))
         ch_umap = TILEPARITY_QCUMAP.out.html
         ch_versions = ch_versions.mix(TILEPARITY_QCUMAP.out.versions.first())
     }
@@ -142,5 +158,14 @@ workflow TILEPARITY {
     h5ad       = ch_h5ad                           // [ meta, [*.h5ad] ]
     rds        = ch_rds                            // [ meta, [*.rds] ]
     qc_umap    = ch_umap                           // [ meta, [html, tsv.gz] ]
+    clusters   = ch_clusters                       // [ meta, cluster_agreement.tsv, cluster.json ]
     versions   = ch_versions
+}
+
+// One item per scale with the files of all its samples: [ [id: combined_mpp<scale>, scale_tag], files ]
+def byScale(ch) {
+    return ch
+        .map { meta, files -> [meta.scale_tag, files] }
+        .groupTuple()
+        .map { tag, files -> [[id: "combined_mpp${tag}", scale_tag: tag], files.flatten()] }
 }

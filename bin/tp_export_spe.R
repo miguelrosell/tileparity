@@ -10,6 +10,9 @@
 #   <prefix>.uni2h.h5        Output2a  (optional)
 #   <prefix>.lbp.h5          Output2b  (optional)
 #   <prefix>.counts.h5       Output3   (genes x tiles, may have 0 genes)
+#   <prefix>.clusters.tsv.gz --cluster: labels of every clustering (optional); the Leiden labels of
+#                            the set keep become colData columns cluster_<view>_leiden_k<k> (text,
+#                            NA outside the set)
 #   <prefix>.*.lineage.json  lineage of the steps above
 #
 # Layout of each object:
@@ -124,9 +127,23 @@ read_counts <- function(path, tile_ids) {
     list(counts = m[, idx, drop = FALSE], gene_names = gene_names)
 }
 
+# --cluster: the Leiden labels of the set keep (same rule as tileparity_lib.cluster.export_columns)
+add_clusters <- function(tiles, path) {
+    cl <- utils::read.delim(path, check.names = FALSE, stringsAsFactors = FALSE, colClasses = "character",
+                            na.strings = character(0))
+    idx <- match(tiles$tile_id, cl$tile_id)
+    if (anyNA(idx)) stop(basename(path), ": ", sum(is.na(idx)), " extracted tiles have no cluster labels")
+    for (col in grep("^keep_.*_leiden_k[0-9]+$", names(cl), value = TRUE)) {
+        v <- cl[[col]][idx]
+        v[v == ""] <- NA_character_
+        tiles[[paste0("cluster_", sub("^keep_", "", col))]] <- v
+    }
+    tiles
+}
+
 # ---- lineage (same layout as bin/tileparity_lib/lineage.py; checksums are MD5 here) ----------
 lineage_parents <- function(dir, prefix) {
-    steps <- c("uni2h", "lbp", "st", "prepare")
+    steps <- c("cluster", "uni2h", "lbp", "st", "prepare")
     files <- file.path(dir, paste0(prefix, ".", steps, ".lineage.json"))
     files <- files[file.exists(files)]
     leaves <- files[!grepl("\\.prepare\\.lineage\\.json$", files)]
@@ -194,6 +211,7 @@ build_spe <- function(dir, prefix) {
         provenance$lbp <- l$attrs
     }
     cnt <- read_counts(f(".counts.h5"), tile_ids)
+    if (file.exists(f(".clusters.tsv.gz"))) tiles <- add_clusters(tiles, f(".clusters.tsv.gz"))
 
     cd <- DataFrame(tiles, check.names = FALSE)
     rownames(cd) <- tile_ids

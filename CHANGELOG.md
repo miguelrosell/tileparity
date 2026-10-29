@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.4.0 (2026-10-29)
+
+How much do the feature views agree? An optional clustering step, agreed after the first run on real data (two samples on the UZH server with 0.3.0).
+
+**Clustering of every view, per slide (`--cluster`, new process `TILEPARITY_CLUSTER`)**
+
+* One task per sample and scale (outputs in `<sample>/mpp<scale>/cluster/`): every feature view — `UNI2H_RGB`, `UNI2H_RGB_HE`, `LBP_RGB`, `LBP_RGB_HE`, `LBP_HE`, `INTENSITY_HE` and `EXPRESSION`, those computed — is clustered on its own, and every pair of clusterings is compared.
+* Two tile sets: `keep`, and as a sensitivity analysis `extended` (the extracted tiles with at least `--cluster_min_counts` = 0.1 times the slide's median molecules per spatial unit of the `keep` tiles; every extracted tile for slides without expression). A set with the same tiles as `keep` is not clustered twice.
+* Preparation as in the QC UMAP, then PCA (50 components). Expression follows Scanpy's standard recipe (counts per 10 000, log1p, 2 000 highly variable genes with the 'seurat' flavour, z-scores clipped at 10).
+* Two methods at the same numbers of clusters k (`--cluster_k`, default 2, 3, 4, 6, 8, 10, 12, 15): Leiden on the graph of the 15 nearest neighbours (UMAP weights; the same graph and partition as Scanpy's `neighbors` and `leiden(flavor="igraph")`), with the resolution searched by bisection until the partition has exactly k clusters, and k-means (10 starts) as a check.
+* Agreement: adjusted Rand index (ARI) and normalised mutual information for every pair of views, tile set, method and k, and a spatial null (torus translation of one map over the other on the tile grid, 100 moves) for the chance agreement of patchy maps, with its percentiles and a p-value; the Leiden–k-means agreement of every view.
+* Outputs: `clusters.tsv.gz` (the label of every tile in every clustering), `cluster_agreement.tsv`, `cluster.json`, and the figures `cluster_agreement_<set>.png` (ARI heatmaps at `--cluster_k_ref` = 8 and curves over k against the null), `cluster_maps_<set>.png` (the clusters of every view on the slide, colours matched to the reference view) and `cluster_contingency_keep.png`.
+* The exports add the Leiden labels of the set `keep` to the tile table (`cluster_<view>_leiden_k<k>`, text; `colData(spe)`, `adata.obs`), and their lineage includes the `cluster` step.
+* New parameters: `--cluster`, `--cluster_views`, `--cluster_sets`, `--cluster_methods`, `--cluster_k`, `--cluster_k_ref`, `--cluster_n_pcs`, `--cluster_n_neighbors`, `--cluster_n_hvg`, `--cluster_min_counts`, `--cluster_null_shifts`, `--cluster_seed`, all checked at start. The test profile switches the clustering on (k = 2 to 4: the test slides have at most 9 tiles per scale).
+* The Python environment adds igraph 1.0.0 (Leiden); container images 0.4.0. With `-profile conda`, the changed environment is created again on the first run, and finished tasks of earlier runs are not reused.
+
+**Documentation**
+
+* `docs/design.md` explains the clustering step by step; `docs/output.md`, `docs/structure.md`, `docs/usage.md`, `docs/faq.md`, the README and CITATIONS.md describe it.
+* `docs/rolandgarros.md` corrected after the first run on the server: `$HOME/tileparity` as the folder (the home directories are on the large disk), `env.sh` creates its cache folders (Nextflow stopped without them) and keeps pip's cache there, one folder per run with the job script inside and `cd $SLURM_SUBMIT_DIR`, a quarter of the shared node (32 CPUs, 128 GB) with a `job.config` that limits Nextflow's local executor to the job, the samplesheet written by a short script, the partition (`main`, the default) and the GPU check (`srun --gres=gpu:1 ... nvidia-smi`), no `-profile mamba` advice; new section 10 on `--cluster` and the cohort.
+
+**Other changes**
+
+* `figures.line_chart` takes a colour per series, and its x axis covers every tick.
+
 ## 0.3.0 (2026-10-27)
 
 Both extractors now read the same images. Agreed before the first run on real data.

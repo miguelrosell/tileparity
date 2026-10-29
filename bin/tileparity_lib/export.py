@@ -3,7 +3,9 @@
 Files are matched by their common prefix ``<sample>_mpp<scale>``. The R script
 ``tp_export_spe.R`` builds the SpatialExperiment from exactly the same files. The
 objects hold the *extracted* tiles; the ``keep`` column marks those that pass every QC
-threshold (identical sets with the default ``--min_tissue_extract``).
+threshold (identical sets with the default ``--min_tissue_extract``). With ``--cluster``,
+the Leiden labels of the set ``keep`` (``<prefix>.clusters.tsv.gz``) are added to the tile
+table as text columns ``cluster_<view>_leiden_k<k>`` (empty for tiles outside the set).
 """
 
 from __future__ import annotations
@@ -34,7 +36,7 @@ COMBINED_BLOCKS = {
     "LBP_CENTER_HE": ("LBP_CENTER_H", "LBP_CENTER_E"),
     "INTENSITY_HE": ("INTENSITY_HE",),
 }
-LINEAGE_STEPS = ("uni2h", "lbp", "st", "prepare")
+LINEAGE_STEPS = ("cluster", "uni2h", "lbp", "st", "prepare")
 
 
 def discover(directory: str | Path) -> list[str]:
@@ -53,6 +55,16 @@ def load_sample(directory: str | Path, prefix: str) -> dict:
     d = Path(directory)
     tiles = read_tiles(d / f"{prefix}.tiles.tsv.gz")
     tile_ids = tiles["tile_id"].to_numpy(dtype=object)
+    clusters_path = d / f"{prefix}.clusters.tsv.gz"
+    if clusters_path.exists():  # --cluster: Leiden labels of the set keep, as text
+        from .cluster import export_columns
+
+        labels = pd.read_csv(clusters_path, sep="\t", dtype=str, keep_default_na=False).set_index("tile_id")
+        missing = set(tile_ids) - set(labels.index)
+        if missing:
+            raise ValueError(f"{clusters_path.name}: {len(missing)} extracted tiles have no cluster labels")
+        for name, column in export_columns(labels.loc[tile_ids]).items():
+            tiles[name] = column.to_numpy(dtype=object)
     prep = json.loads((d / f"{prefix}.prepare.json").read_text())
     blocks: dict[str, tuple[np.ndarray, np.ndarray]] = {}
     provenance: dict = {"prepare": prep}

@@ -186,7 +186,8 @@ def legend(items: list[tuple[tuple[int, int, int], str]], size: int = 13, swatch
 def line_chart(series: list[dict], x_label: str, y_label: str, size: tuple[int, int] = (900, 460),
                y_range: tuple[float, float] | None = None, x_ticks: list[float] | None = None,
                log_x: bool = False) -> Image.Image:
-    """Simple line chart. Each series: {"name", "x", "y", optional "lo"/"hi" band}."""
+    """Simple line chart. Each series: {"name", "x", "y", optional "lo"/"hi" band, optional
+    "colour" (default: the next colour of SERIES)}."""
     W, H = size
     left, right, top, bottom = 70, 20, 30, 60
     fnt, small = font(13), font(12)
@@ -196,6 +197,8 @@ def line_chart(series: list[dict], x_label: str, y_label: str, size: tuple[int, 
     xs = np.concatenate([np.asarray(s["x"], float) for s in series]) if series else np.array([0.0, 1.0])
     ys = np.concatenate([np.asarray(s.get("hi", s["y"]), float) for s in series]) if series else np.array([0.0, 1.0])
     tx = (lambda v: np.log10(v)) if log_x else (lambda v: np.asarray(v, float))
+    if x_ticks is not None and len(x_ticks):  # the axis covers every tick, with or without data there
+        xs = np.concatenate([xs, np.asarray(x_ticks, float)])
     x0, x1 = float(np.nanmin(tx(xs))), float(np.nanmax(tx(xs)))
     if x1 == x0:
         x1 = x0 + 1
@@ -222,8 +225,10 @@ def line_chart(series: list[dict], x_label: str, y_label: str, size: tuple[int, 
     draw.text((left + (W - left - right) / 2 - text_width(draw, x_label, fnt) / 2, H - 24), x_label, fill=INK, font=fnt)
     draw.text((8, 2), y_label, fill=INK, font=fnt)
     for i, s in enumerate(series):
-        colour = SERIES[i % len(SERIES)]
+        colour = tuple(s.get("colour", SERIES[i % len(SERIES)]))
         x = np.asarray(s["x"], float)
+        if x.size == 0:
+            continue
         if "lo" in s and "hi" in s:
             Xl, Yl = px(x, s["lo"])
             Xh, Yh = px(x, s["hi"])

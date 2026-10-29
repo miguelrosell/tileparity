@@ -1,4 +1,5 @@
-# Software for Processes 1, 1b, 2b, 3, the AnnData export and the optional 3-D UMAP QC.
+# Software for Processes 1, 1b, 2b, 3, the AnnData export, the optional 3-D UMAP QC and the
+# optional clustering (--cluster).
 # Used both by the Docker image (containers/python/Dockerfile) and by -profile conda.
 # Versions are the ones the test suite was run with.
 name: tileparity-python
@@ -21,10 +22,13 @@ dependencies:
       - pyvips-binary==8.18.7
       - fastlbp==0.3.4
       - psutil==7.2.2
-      # only for --qc_umap (3-D UMAP page)
+      # only for --qc_umap (3-D UMAP page) and --cluster
       - scikit-learn==1.9.1
       - numba==0.68.0
       - llvmlite==0.50.0
       - pynndescent==0.6.0
       - umap-learn==0.5.12
       - plotly==7.1.0
+      # only for --cluster (Leiden)
+      - igraph==1.0.0
+      - texttable==1.7.2

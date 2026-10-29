@@ -11,6 +11,7 @@ Input1 --[1 PREPARE]--> Output1 = Input2 (resampled image, tile table, unit->til
                            |-- [1a+2a UNI2H_EMBED] (rgb, rgb_he) ------> Output2a  tiles x 1536 per input set
                            |-- [2b FASTLBP_EXTRACT] (rgb, rgb_he) -----> Output2b  tiles x 1145 per channel (+ intensity)
                            |-- [3 AGGREGATEST] ------------------------> Output3   genes x tiles
+                           |-- [CLUSTER] (optional, per slide) --------> clusters of every view, agreement between views
                            |-- [4 EXPORTSPE / EXPORTANNDATA] ----------> SpatialExperiment (.rds), AnnData (.h5ad)
                            '-- [QCUMAP] (optional) --------------------> interactive 3-D UMAP of every view
 ```
@@ -24,6 +25,7 @@ Input1 --[1 PREPARE]--> Output1 = Input2 (resampled image, tile table, unit->til
 | 3 | `TILEPARITY_AGGREGATEST` | Expression per tile: the sum of the Visium HD bins inside each tile, or the Visium spots split between the tiles they touch (multinomially, by area share). |
 | 4 | `TILEPARITY_EXPORTSPE`, `TILEPARITY_EXPORTANNDATA` | One object per sample and one combined object per scale, with their lineage. |
 | QC | `TILEPARITY_QCUMAP` | With `--qc_umap`: one interactive page per scale with a 3-D UMAP of UNI2-h and LBP on each input set, and of expression. |
+| Analysis | `TILEPARITY_CLUSTER` | With `--cluster`: per slide and scale, every view clustered on its own (Leiden with the resolution tuned to give exactly k clusters, and k-means, for k = 2 to 15), and how much the views agree (adjusted Rand index, NMI and a spatial null), with figures; the exports get the Leiden labels. |
 
 ### The same images for both extractors
 
@@ -113,6 +115,7 @@ Relative paths are resolved against the samplesheet's folder. See [`assets/sampl
 | `--stain_vectors` | `slide` | H and E colours: estimated on each slide (`slide`) or the published ones (`standard`) |
 | `--lbp_center` | `false` | also store the LBP codes of the tiles' central pixels |
 | `--qc_umap` | `false` | interactive 3-D UMAP of every feature view per scale |
+| `--cluster` | `false` | cluster every view of every slide on its own and measure how much the views agree (`--cluster_k`, `--cluster_k_ref`, `--cluster_sets`, … in [docs/usage.md](docs/usage.md)) |
 | `--uni2h_weights` | — | local UNI2-h weights (recommended); otherwise downloaded with `HF_TOKEN` |
 | `--skip_uni2h`, `--skip_lbp`, `--skip_spe`, `--skip_anndata` | `false` | switch branches off |
 
@@ -127,6 +130,7 @@ results/
 ├── <sample>/mpp<scale>/uni2h/     <id>.uni2h.h5      (Output2a)
 ├── <sample>/mpp<scale>/lbp/       <id>.lbp.h5        (Output2b), lbp_qc.png
 ├── <sample>/mpp<scale>/st/        <id>.counts.h5     (Output3), per-tile summary
+├── <sample>/mpp<scale>/cluster/   [clusters of every view, agreement between views, figures]
 ├── export/mpp<scale>/spe/         <id>.rds + combined_mpp<scale>.rds
 ├── export/mpp<scale>/anndata/     <id>.h5ad + combined_mpp<scale>.h5ad
 ├── qc/mpp<scale>/                 [3-D UMAP page]
@@ -152,20 +156,21 @@ A new extractor is one module that reads `[meta, resampled.tif, tiles.tsv.gz, pr
 
 ## Status and roadmap
 
-Version 0.3.0 (changes in [CHANGELOG.md](CHANGELOG.md)). What has been run so far:
+Version 0.4.0 (changes in [CHANGELOG.md](CHANGELOG.md)). What has been run so far:
 
-* the Python library: 86 unit tests, including LBP histograms identical to fastLBP's whole-image run and the H&E-only image against a direct computation;
+* the Python library: 98 unit tests, including LBP histograms identical to fastLBP's whole-image run, the H&E-only image against a direct computation, and the clustering's expression recipe, neighbour graph and Leiden partition identical to Scanpy's;
+* two real samples (the Visium HD colorectal cancer slide P1 and the HEST-1k Visium sample ZEN36) at 0.5 µm/px on the UZH server with tileparity 0.3.0: conda route, one SLURM job, UNI2-h in fp16 on an NVIDIA L4, about 35 minutes;
 * the whole workflow on the synthetic test data without containers, with every option of the test profile switched on and both exports (AnnData; SpatialExperiment with R 4.3 / SpatialExperiment 1.12), with Nextflow 25.04.0 and 26.10.3; stub runs with 25.04.0, 25.04.7, 26.04.7 and 26.10.3, and `nextflow lint` without errors with 25.04.7, 26.04.7 and 26.10.3 (the linter of 25.04.0 wrongly reports `meta` as undefined in `conf/modules.config`);
 * GitHub Actions: `CI` runs the unit tests, a stub run with the oldest supported and the latest Nextflow, and lint with the latest, on every push; `Containers` builds the three images and runs the test profile inside them in Docker.
 
-The GPU path (CUDA) has not been run yet; the first real run on a GPU machine will be its test. Neither has a full-size slide: the first real samples will show the real run times.
+The clustering (`--cluster`) has been run on the synthetic test data only so far; its first real run will be the two samples above.
 
 Not yet implemented:
 
 * stain normalisation to reference colours as an option (the H and E colours are already estimated per slide in Process 1b);
 * an input mode for pre-tiled image collections such as NCT-CRC-HE-100K;
 * cell-level units (segmented nuclei) as a third tiling mode;
-* the analysis layer (comparing and integrating the views) — planned in `analysis/` after the first real run.
+* the analysis layer beyond the per-slide clustering (comparing and integrating the views across slides).
 
 ## Citations
 

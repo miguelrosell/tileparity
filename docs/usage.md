@@ -51,6 +51,7 @@ Useful options:
 * `--uni2h_inputs rgb` — UNI2-h on the slide only, not on its H&E-only version (half the GPU time).
 * `--stain_vectors standard` — the same published H and E colours for every slide instead of each slide's own.
 * `--qc_umap` — write an interactive 3-D UMAP of every feature view per scale (`qc/`).
+* `--cluster` — cluster every feature view of every slide and scale on its own and measure how much the views agree (`<sample>/mpp<scale>/cluster/`). Options: `--cluster_k` (numbers of clusters, default `2,3,4,6,8,10,12,15`), `--cluster_k_ref` (the k of the maps and heatmaps, 8), `--cluster_sets` (`keep,extended`; add `--min_tissue_extract 0.3` so that `extended` includes tiles with 30–50 % tissue), `--cluster_views` (default `all` computed views), `--cluster_methods` (`leiden,kmeans`), `--cluster_min_counts` (counts floor of `extended`, 0.1 of the median), `--cluster_n_pcs` (50), `--cluster_n_neighbors` (15), `--cluster_n_hvg` (2000), `--cluster_null_shifts` (100), `--cluster_seed` (0). The method is explained in [design.md](design.md#optional-clustering-of-every-view-per-slide---cluster).
 * `--visium_tiling spot` — spot-centred tiles for every standard Visium / HEST sample; `--visium_split fraction` — split spots by expected value instead of multinomially.
 * `--publish_images` — also keep the resampled and channels images (large).
 * `-profile debug` — keep work directories and print host names.

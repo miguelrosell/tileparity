@@ -22,9 +22,13 @@ flowchart TD
     U -.-> Q["TILEPARITY_QCUMAP<br/>only with --qc_umap"]
     L -.-> Q
     A -.-> Q
+    U -.-> K["TILEPARITY_CLUSTER<br/>only with --cluster;<br/>one task per sample x scale"]
+    L -.-> K
+    A -.-> K
+    K -. "Leiden labels of the set keep" .-> E
 ```
 
-Every task of Processes 1 to 3 works on one sample at one scale (`<id>` = `<sample>_mpp<scale>`, e.g. `A_P1_CRC_mpp0.5000`); the exports and the QC page gather all samples of one scale. Only Process 1 makes geometric decisions; every later step reads its tile table. Process 1b computes every input image of the extractors once, so UNI2-h and fastLBP read exactly the same pixels in each input set (`rgb`: the slide; `rgb_he`: the slide rebuilt from haematoxylin and eosin only).
+Every task of Processes 1 to 3 and of the clustering works on one sample at one scale (`<id>` = `<sample>_mpp<scale>`, e.g. `A_P1_CRC_mpp0.5000`); the exports and the QC page gather all samples of one scale. Only Process 1 makes geometric decisions; every later step reads its tile table. Process 1b computes every input image of the extractors once, so UNI2-h and fastLBP read exactly the same pixels in each input set (`rgb`: the slide; `rgb_he`: the slide rebuilt from haematoxylin and eosin only).
 
 | process | step (lineage) | reads | writes | published to |
 |---|---|---|---|---|
@@ -38,6 +42,7 @@ Every task of Processes 1 to 3 works on one sample at one scale (`<id>` = `<samp
 | `TILEPARITY_EXPORTSPE` | `spe`, `spe_combined` | everything above, for all samples of a scale | `<id>.rds`, `combined_mpp<scale>.rds` | `export/mpp<scale>/spe/` |
 | `TILEPARITY_EXPORTANNDATA` | `anndata`, `anndata_combined` | as the SPE export | `<id>.h5ad`, `combined_mpp<scale>.h5ad` | `export/mpp<scale>/anndata/` |
 | `TILEPARITY_QCUMAP` | `qc_umap` | as the exports | `combined_mpp<scale>.qc_umap.{html,tsv.gz}` | `qc/mpp<scale>/` |
+| `TILEPARITY_CLUSTER` | `cluster` | the outputs of Processes 1 to 3 for one sample and scale | `clusters.tsv.gz`, `cluster_agreement.tsv`, `cluster.json`, `cluster_{agreement,maps}_<set>.png`, `cluster_contingency_keep.png` | `<sample>/mpp<scale>/cluster/` |
 
 Every process also writes `<id>.<step>.lineage.json` next to its outputs (published with them) and a `versions.yml` (collected in `pipeline_info/software_versions.yml`). The large images (`resampled.tif`, `channels.tif`) stay in the work directory unless `--publish_images` is set.
 
@@ -48,7 +53,7 @@ Process 1 writes one row per candidate tile (any tissue) with two decisions:
 * `extract`: features and counts are computed for this tile. True when the tile lies inside the image, has at least `--min_tissue_extract` tissue (default: the same as `--min_tissue`), passes the spatial checks (`--min_st_coverage` for Visium HD, `--min_spot_overlap` for Visium on the grid) and, with `--drop_blurred`, is not blurred.
 * `keep`: the default set for analysis. True when the tile is extracted *and* has at least `--min_tissue` tissue.
 
-`qc_fail` lists every reason a tile fails `keep` (`outside_image`, `low_tissue`, `low_st_coverage`, `no_st_units`, `blurred`). Process 1b computes the channels image for the whole slide, but estimates the slide's stain colours from pixels of the `extract` tiles and reports `rgb_he` per `extract` tile. UNI2-h, LBP and the expression aggregation read the `extract` tiles; the exports contain the `extract` tiles with both columns, so an analysis can use `keep` or any stricter threshold on `tissue_fraction` without rerunning anything.
+`qc_fail` lists every reason a tile fails `keep` (`outside_image`, `low_tissue`, `low_st_coverage`, `no_st_units`, `blurred`). Process 1b computes the channels image for the whole slide, but estimates the slide's stain colours from pixels of the `extract` tiles and reports `rgb_he` per `extract` tile. UNI2-h, LBP and the expression aggregation read the `extract` tiles; the exports contain the `extract` tiles with both columns, so an analysis can use `keep` or any stricter threshold on `tissue_fraction` without rerunning anything. The clustering uses two sets: `keep`, and `extended` (the `extract` tiles with enough RNA, a sensitivity analysis).
 
 ## Lineage: where every output comes from
 
@@ -62,7 +67,7 @@ A lineage file describes one step and contains the records of every step upstrea
     "step": "lbp",
     "process": "TILEPARITY_PIPELINE:TILEPARITY:FASTLBP_EXTRACT",
     "created_utc": "2026-10-24T10:00:00Z",
-    "tileparity_version": "0.3.0",
+    "tileparity_version": "0.4.0",
     "command": ["tp_extract_lbp.py", "--channels-image", "A_P1_mpp0.5000.channels.tif", "..."],
     "parameters": {"channel_sets": "rgb,rgb_he", "...": "..."},
     "software": {"python": "3.13.16", "fastlbp": "0.3.4", "...": "..."},
@@ -106,3 +111,6 @@ Every figure is a PNG with a title strip, the figure and a caption underneath in
 | `channels/<id>.rgb_he_qc.png` | Process 1b, with input set `rgb_he` | the slide next to its version rebuilt from H and E only, how much each pixel changed, and the tiles with the median, 90th-percentile and largest change |
 | `lbp/<id>.lbp_qc.png` | Process 2b | the share of irregular LBP patterns per channel and radius |
 | `qc/mpp<scale>/combined_mpp<scale>.qc_umap.html` | QC, with `--qc_umap` | interactive 3-D UMAP of every feature view (UNI2-h and LBP per input set, expression) |
+| `cluster/<id>.cluster_agreement_<set>.png` | clustering, with `--cluster` | how much the clusterings of the views agree: ARI of every pair at one k, and with the reference view for every k, against the spatial null |
+| `cluster/<id>.cluster_maps_<set>.png` | clustering, with `--cluster` | the clusters of every view on the slide, coloured after the matching clusters of the reference view |
+| `cluster/<id>.cluster_contingency_keep.png` | clustering, with `--cluster` | how the clusters of every view are distributed over the clusters of the reference view |

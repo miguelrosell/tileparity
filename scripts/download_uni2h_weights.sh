@@ -14,7 +14,7 @@ repo_bin="$(cd "$(dirname "$0")/../bin" && pwd)"
 mkdir -p "$outdir"
 : "${HF_TOKEN:?export HF_TOKEN=<your Hugging Face token> first}"
 if [[ "${USE_DOCKER:-0}" == "1" ]]; then
-    image=${UNI2H_IMAGE:-ghcr.io/miguelrosell/tileparity-uni2h:0.3.0}
+    image=${UNI2H_IMAGE:-ghcr.io/miguelrosell/tileparity-uni2h:0.4.0}
     docker run --rm -u "$(id -u):$(id -g)" -e HF_TOKEN -e HF_HOME=/out/.hf_home \
         -v "$(cd "$outdir" && pwd)":/out -v "$repo_bin":/tp_bin:ro \
         "$image" python /tp_bin/tp_download_uni2h.py --outdir /out

@@ -30,3 +30,17 @@ Methods used by the options added in 0.2.0:
 Methods used by the options added in 0.3.0:
 
 * **Stain vectors estimated per slide** (`--stain_vectors slide`) — Macenko M. et al. A method for normalizing histology slides for quantitative analysis. *IEEE ISBI*, 1107–1110 (2009). The H&E-only image (`rgb_he`) uses the colour-deconvolution model of Ruifrok & Johnston (2001), above.
+
+Methods used by the clustering added in 0.4.0 (`--cluster`):
+
+* **Leiden** — Traag V.A., Waltman L., van Eck N.J. From Louvain to Leiden: guaranteeing well-connected communities. *Sci Rep* 9, 5233 (2019).
+* **Modularity with a resolution parameter** — Reichardt J., Bornholdt S. Statistical mechanics of community detection. *Phys Rev E* 74, 016110 (2006).
+* **igraph** (Leiden implementation) — Csárdi G., Nepusz T. The igraph software package for complex network research. *InterJournal Complex Systems* 1695 (2006).
+* **Scanpy** (the expression recipe, neighbour graph and Leiden settings that the step reproduces) — Wolf F.A., Angerer P., Theis F.J. SCANPY: large-scale single-cell gene expression data analysis. *Genome Biol* 19, 15 (2018).
+* **Highly variable genes, 'seurat' flavour** — Satija R., Farrell J.A., Gennert D., Schier A.F., Regev A. Spatial reconstruction of single-cell gene expression data. *Nat Biotechnol* 33, 495–502 (2015).
+* **Neighbour-graph weights** (fuzzy simplicial set) — UMAP, McInnes et al. (2018), above.
+* **k-means** — Lloyd S.P. Least squares quantization in PCM. *IEEE Trans Inf Theory* 28, 129–137 (1982); initialisation: Arthur D., Vassilvitskii S. k-means++: the advantages of careful seeding. *Proc. ACM-SIAM SODA*, 1027–1035 (2007).
+* **Adjusted Rand index** — Hubert L., Arabie P. Comparing partitions. *J Classif* 2, 193–218 (1985).
+* **Normalised mutual information** — Vinh N.X., Epps J., Bailey J. Information theoretic measures for clusterings comparison. *JMLR* 11, 2837–2854 (2010).
+* **Torus-translation null** — Harms K.E., Condit R., Hubbell S.P., Foster R.B. Habitat associations of trees and shrubs in a 50-ha neotropical forest plot. *J Ecol* 89, 947–959 (2001).
+* **Hungarian algorithm** (matching clusters for the colours of the maps) — Kuhn H.W. The Hungarian method for the assignment problem. *Naval Res Logist Q* 2, 83–97 (1955).

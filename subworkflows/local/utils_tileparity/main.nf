@@ -95,11 +95,58 @@ def validateParams() {
     if (!(params.uni2h_precision in ['fp32', 'fp16', 'bf16'])) {
         error("--uni2h_precision must be fp32, fp16 or bf16")
     }
+    if (params.cluster) {
+        validateCluster()
+    }
     if (params.skip_uni2h && params.skip_lbp) {
         log.warn("--skip_uni2h and --skip_lbp are both set: only tiles and expression per tile will be produced")
     }
     if (params.uni2h_test_mode && !params.skip_uni2h) {
         log.warn("UNI2-h TEST MODE: embeddings come from a random 1-block network and are meaningless")
+    }
+}
+
+def validateCluster() {
+    listParam('cluster_views', params.cluster_views,
+              ['all', 'UNI2H_RGB', 'UNI2H_RGB_HE', 'LBP_RGB', 'LBP_RGB_HE', 'LBP_HE', 'INTENSITY_HE', 'EXPRESSION'])
+    listParam('cluster_sets', params.cluster_sets, ['keep', 'extended'])
+    listParam('cluster_methods', params.cluster_methods, ['leiden', 'kmeans'])
+    def ks = (params.cluster_k ?: '').toString().tokenize(',')*.trim().findAll { v -> v }
+    if (!ks || ks.any { v -> !(v ==~ /[0-9]+/) || (v as Integer) < 2 }) {
+        error("--cluster_k '${params.cluster_k}': use a comma-separated list of whole numbers of at least 2, e.g. '4,8,12'")
+    }
+    wholeParam('cluster_k_ref', params.cluster_k_ref, 2)
+    wholeParam('cluster_n_pcs', params.cluster_n_pcs, 1)
+    wholeParam('cluster_n_neighbors', params.cluster_n_neighbors, 2)
+    wholeParam('cluster_n_hvg', params.cluster_n_hvg, 10)
+    wholeParam('cluster_null_shifts', params.cluster_null_shifts, 0)
+    wholeParam('cluster_seed', params.cluster_seed, 0)
+    def floor = params.cluster_min_counts.toString()
+    if (!(floor ==~ /[0-9]*\.?[0-9]+/) || (floor as Double) > 1) {
+        error("--cluster_min_counts '${params.cluster_min_counts}' must be between 0 and 1 (a fraction of the keep tiles' median)")
+    }
+    if (!((params.cluster_k_ref as Integer) in ks.collect { v -> v as Integer })) {
+        log.warn("--cluster_k_ref ${params.cluster_k_ref} is not in --cluster_k '${params.cluster_k}': the figures use the closest k below it")
+    }
+}
+
+// A comma-separated subset of `allowed` (or 'all' when allowed)
+def listParam(String name, value, List allowed) {
+    def items = (value ?: '').toString().tokenize(',')*.trim().findAll { v -> v }
+    if (items == ['all'] && 'all' in allowed) {
+        return items
+    }
+    def bad = items - allowed
+    if (!items || bad) {
+        error("--${name} '${value}': use a comma-separated subset of ${(allowed - ['all']).join(', ')}" +
+              ('all' in allowed ? ', or all' : ''))
+    }
+    return items
+}
+
+def wholeParam(String name, value, int min) {
+    if (!(value.toString() ==~ /[0-9]+/) || (value as Integer) < min) {
+        error("--${name} '${value}' must be a whole number of at least ${min}")
     }
 }
 
@@ -224,6 +271,7 @@ def summaryText(int nSamples, List scales) {
     extractors  : ${[params.skip_uni2h ? null : "UNI2-h (${params.uni2h_inputs})" + (params.uni2h_test_mode ? ' [TEST MODE]' : ''), params.skip_lbp ? null : "fastLBP (${params.lbp_channels}${params.lbp_center ? ', + centre' : ''})"].findAll().join(', ')}
     stains      : H and E vectors ${params.stain_vectors == 'slide' ? 'estimated on each slide (Macenko)' : 'standard (Ruifrok & Johnston)'}
     exports     : ${[params.skip_spe ? null : 'SpatialExperiment', params.skip_anndata ? null : 'AnnData', params.qc_umap ? '3-D UMAP QC' : null].findAll().join(', ')}
+    clustering  : ${params.cluster ? "per slide, ${params.cluster_methods} at k = ${params.cluster_k} (figures at k = ${params.cluster_k_ref}), sets ${params.cluster_sets}" : 'off (--cluster)'}
     gpu         : ${params.use_gpu}
     outdir      : ${params.outdir}
     --------------------------------------------------

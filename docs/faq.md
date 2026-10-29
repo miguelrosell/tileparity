@@ -89,6 +89,23 @@ A sum of counts is still a count: it is what one spot with the tile's footprint 
 **How do I know where a number or a figure comes from?**
 Every step writes `<id>.<step>.lineage.json` with its command, parameters, software versions and the checksums of the files it read and wrote, plus the records of every step upstream; the exported objects carry the same information (`metadata(spe)$tileparity$lineage`, `adata.uns["tileparity"]["lineage"]`). Every figure has a caption whose last line names the chain of processes and the original input files. See [structure.md](structure.md#lineage-where-every-output-comes-from).
 
+## Comparing the views (`--cluster`)
+
+**What does `--cluster` answer?**
+Whether the feature views divide a slide's tissue into the same regions. Every view (UNI2-h and LBP on each input set, the H and E intensity statistics, expression) of every slide and scale is clustered on its own, and every pair of clusterings is compared with the adjusted Rand index (ARI). The figures are in `<sample>/mpp<scale>/cluster/`; [design.md](design.md#optional-clustering-of-every-view-per-slide---cluster) explains every choice.
+
+**Leiden does not take a number of clusters. How are the views compared at the same k?**
+Leiden's resolution decides how many clusters come out, so for every k the resolution is searched (bisection on a log scale) until the partition has exactly k clusters. k-means takes k directly and runs as a check on the same principal components. When Leiden cannot reach a k exactly, the closest partition is used and recorded (`k_reached` in `cluster.json`), and that point is left out of the curves.
+
+**What ARI means "the views agree"?**
+1 means identical partitions, about 0 means no more agreement than random labels. Because cluster maps are made of patches, two unrelated maps already agree a little (often an ARI of 0.1–0.2); the spatial null measures this chance level for each pair by moving one map over the other. An ARI well above the null's 95th percentile (the small number in the heatmaps, the shaded band in the curves) is real agreement. Compare views at the same k: ARI changes with k.
+
+**Why one slide at a time?**
+Clustering slides together would mostly separate the slides (scanner, staining, section) instead of tissue regions. Cluster numbers are therefore per slide (and per view): cluster 3 of one slide has nothing to do with cluster 3 of another.
+
+**Can I use the clusters in R or Python?**
+`cluster/<id>.clusters.tsv.gz` has the label of every tile in every clustering (`<set>_<view>_<method>_k<k>`), and the exported objects add the Leiden labels of the set `keep` to the tile table: `spe$cluster_UNI2H_RGB_leiden_k8` in R, `adata.obs["cluster_UNI2H_RGB_leiden_k8"]` in Python (text; empty or `NA` for tiles outside `keep`).
+
 ## Running
 
 **Which Nextflow version?**
@@ -103,7 +120,7 @@ Take the decisions in this order:
    * `test` runs on the synthetic data.
 2. **Data** (per sample, in the samplesheet): `spatial_format` (`spaceranger_hd`, `spaceranger`, `hest` or empty), optional `mask`, and `tiling` to override the tiling of one sample.
 3. **Scales:** `--scales_mpp`.
-4. **Branches and outputs:** `--skip_uni2h`, `--skip_lbp`, `--skip_spe`, `--skip_anndata`, `--export_combined`, `--qc_umap`.
+4. **Branches and outputs:** `--skip_uni2h`, `--skip_lbp`, `--skip_spe`, `--skip_anndata`, `--export_combined`, `--qc_umap`, `--cluster` (with `--cluster_*`).
 5. **UNI2-h weights:** `--uni2h_weights` (recommended) or a download with `HF_TOKEN`.
 6. **Fine-tuning**, rarely needed:
    * tissue mask and QC: `--mask_method`, `--mask_*`, `--mask_compare`, `--min_tissue`, `--min_tissue_extract`, `--qc_tissue_thresholds`, `--blur_mad`, `--drop_blurred`;
