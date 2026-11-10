@@ -252,6 +252,39 @@ def test_cli_clusters_every_view_and_measures_agreement(tmp_path, monkeypatch):
     assert a.obs["cluster_EXPRESSION_leiden_k4"].astype(str).isin(["", "0", "1", "2", "3"]).all()
 
 
+def test_cli_clusters_the_stain_views_and_describes_every_view(tmp_path, monkeypatch):
+    import tp_cluster
+
+    data, out = tmp_path / "data", tmp_path / "out"
+    data.mkdir()
+    out.mkdir()
+    region = _write_slide(data)
+    prefix = "S_mpp0.5000"
+    # lbp.h5 of the input sets he, h and e: blocks LBP_H and LBP_E, with the record of the sets
+    rng = np.random.default_rng(3)
+    T, n = 224, len(region)
+    ids = export.load_sample(data, prefix)["tiles"]["tile_id"].to_numpy(dtype=object)
+    blocks = {}
+    for ch in ("H", "E"):
+        probs = rng.dirichlet(np.ones(10) * 2, size=4)
+        blocks[f"LBP_{ch}"] = (np.vstack([rng.multinomial(T * T, probs[k]) for k in region]),
+                               [f"{ch}_r1_p8_u{u}" for u in range(10)])
+    blocks["INTENSITY_HE"] = (rng.normal(0, 1, (n, 10)), [f"i{i}" for i in range(10)])
+    features.write(str(data / f"{prefix}.lbp.h5"), ids, blocks, attrs={"channel_sets": ["he", "h", "e"]})
+    s = export.load_sample(data, prefix)
+    assert {"LBP_HE", "LBP_H", "LBP_E"} <= set(s["blocks"]) and "LBP_RGB" not in s["blocks"]
+    assert s["blocks"]["LBP_HE"][0].shape[1] == 20 and s["blocks"]["LBP_H"][0].shape[1] == 10
+    monkeypatch.chdir(out)
+    tp_cluster.main(["--input-dir", str(data), "--views", "LBP_HE,LBP_H,LBP_E,EXPRESSION", "--sets", "keep",
+                     "--k", "2,4", "--k-ref", "4", "--null-shifts", "5"])
+    labels = pd.read_csv(out / f"{prefix}.clusters.tsv.gz", sep="\t", dtype=str, keep_default_na=False)
+    assert {"keep_LBP_H_leiden_k4", "keep_LBP_E_leiden_k4", "keep_LBP_HE_kmeans_k4"} <= set(labels.columns)
+    summary = json.loads((out / f"{prefix}.cluster.json").read_text())
+    assert list(summary["view_descriptions"]) == ["LBP_HE", "LBP_H", "LBP_E", "EXPRESSION"]
+    assert "haematoxylin" in summary["view_descriptions"]["LBP_H"]
+    assert "LBP_E = LBP histograms of the E (eosin) amount alone" in tp_cluster.views_text(summary["sets"]["keep"])
+
+
 def test_image_only_slide_uses_uni2h_as_reference(tmp_path, monkeypatch):
     import tp_cluster
 

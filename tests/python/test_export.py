@@ -26,3 +26,13 @@ def test_single_expression_sample_gives_image_only_combination():
     combined = export.combine_anndata([_adata("a", 3, ["g1"]), _adata("img", 2, [])])
     assert combined.n_obs == 5 and combined.n_vars == 0
     assert combined.obsm["X_uni2h_rgb"].shape == (5, 4)
+
+
+def test_lbp_views_follow_the_computed_input_sets():
+    raw = dict.fromkeys(["LBP_R", "LBP_G", "LBP_B", "LBP_H", "LBP_E", "INTENSITY_HE"])
+    assert list(export.lbp_views(raw, ["rgb", "he"])) == ["LBP_RGB", "LBP_HE", "INTENSITY_HE"]
+    assert list(export.lbp_views(raw, ["he", "h", "e"])) == ["LBP_HE", "LBP_H", "LBP_E", "INTENSITY_HE"]
+    assert list(export.lbp_views(raw, ["h"])) == ["LBP_H", "INTENSITY_HE"]
+    assert export.lbp_views(raw, ["he", "h"])["LBP_H"] == ("LBP_H",)
+    # lbp.h5 files without the record of their input sets (before 0.2): no LBP_H, LBP_E
+    assert list(export.lbp_views(raw, None)) == ["LBP_RGB", "LBP_HE", "INTENSITY_HE"]

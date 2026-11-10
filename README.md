@@ -9,7 +9,8 @@ Input1 --[1 PREPARE]--> Output1 = Input2 (resampled image, tile table, unit->til
                            |-- [1b CHANNELS] --------------------------> the input sets: rgb (the slide) and
                            |                                             rgb_he (the slide rebuilt from H and E only)
                            |-- [1a+2a UNI2H_EMBED] (rgb, rgb_he) ------> Output2a  tiles x 1536 per input set
-                           |-- [2b FASTLBP_EXTRACT] (rgb, rgb_he) -----> Output2b  tiles x 1145 per channel (+ intensity)
+                           |-- [2b FASTLBP_EXTRACT] (rgb, rgb_he) -----> Output2b  tiles x 1145 per channel (+ intensity);
+                           |                                             optional: he, h, e (the stain amounts)
                            |-- [3 AGGREGATEST] ------------------------> Output3   genes x tiles
                            |-- [CLUSTER] (optional, per slide) --------> clusters of every view, agreement between views
                            |-- [4 EXPORTSPE / EXPORTANNDATA] ----------> SpatialExperiment (.rds), AnnData (.h5ad)
@@ -33,9 +34,11 @@ Input1 --[1 PREPARE]--> Output1 = Input2 (resampled image, tile table, unit->til
 |---|---|---|---|
 | `rgb` (default) | the slide as it is | `UNI2H_RGB` | `LBP_RGB`: one LBP per channel R, G, B |
 | `rgb_he` (default) | the slide rebuilt from haematoxylin and eosin only: every pixel's colour replaced by the closest colour made of the two stains, so the colour that is neither H nor E (pen, pigment, a tint of the glass or the scanner) is removed | `UNI2H_RGB_HE` | `LBP_RGB_HE`: one LBP per channel R_he, G_he, B_he |
-| `he` (optional) | the amounts of H and of E | — (UNI2-h needs three channels) | `LBP_HE` |
+| `he` (optional) | the amounts of H and of E, two single-channel images | — (UNI2-h needs three channels) | `LBP_HE`: one LBP on H and one on E, side by side |
+| `h` (optional) | the amount of H alone (haematoxylin: nuclei) | — | `LBP_H` |
+| `e` (optional) | the amount of E alone (eosin: cytoplasm, stroma) | — | `LBP_E` |
 
-Comparing `rgb` with `rgb_he` shows how much each extractor relies on colour that is neither H nor E; comparing the extractors on the same set compares them on identical pixels. [docs/design.md](docs/design.md#the-input-images-of-both-extractors-1b) explains how `rgb_he` is computed.
+Comparing `rgb` with `rgb_he` shows how much each extractor relies on colour that is neither H nor E; comparing the extractors on the same set compares them on identical pixels. `he`, `h` and `e` are for fastLBP only: LBP reads one channel at a time, so it can read the stain amounts directly, which UNI2-h cannot; comparing them with `rgb_he` shows how much fastLBP loses by reading the three-channel images made for UNI2-h (`--lbp_channels rgb,rgb_he,he,h,e`). [docs/design.md](docs/design.md#the-input-images-of-both-extractors-1b) explains how `rgb_he` is computed.
 
 Documentation:
 
@@ -111,7 +114,7 @@ Relative paths are resolved against the samplesheet's folder. See [`assets/sampl
 | `--visium_tiling` | `grid` | standard Visium / HEST: `grid` (spots split by area) or `spot` (tiles centred on spots) |
 | `--visium_split` | `multinomial` | how a spot's molecules are split between grid tiles: `multinomial` or `fraction` |
 | `--uni2h_inputs` | `rgb,rgb_he` | UNI2-h input sets: `rgb`, `rgb_he` |
-| `--lbp_channels` | `rgb,rgb_he` | fastLBP input sets: `rgb`, `rgb_he`, `he` |
+| `--lbp_channels` | `rgb,rgb_he` | fastLBP input sets: `rgb`, `rgb_he`, `he` (H and E), `h` (H alone), `e` (E alone) |
 | `--stain_vectors` | `slide` | H and E colours: estimated on each slide (`slide`) or the published ones (`standard`) |
 | `--lbp_center` | `false` | also store the LBP codes of the tiles' central pixels |
 | `--qc_umap` | `false` | interactive 3-D UMAP of every feature view per scale |

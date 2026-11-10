@@ -16,7 +16,7 @@
 
 ## `<sample>/mpp<scale>/channels/` — the input images of both extractors (Process 1b)
 
-* `<id>.channels.json`: the input sets of each extractor, the bands of the channels image, the stain vectors (`stain_vectors`: method `slide` or `standard`, H, E and R = H × E in optical density, the angle between H and E and to the standard vectors, the number of stained pixels used, the share of their squared optical density in the H–E plane, and a `note` when the standard vectors had to be used or H and E are poorly separated), the H/E mapping and the share of pixels above it, and the `rgb_he` summary (median, 90th-percentile and largest share of optical density removed per tile; median change of R, G, B).
+* `<id>.channels.json`: the input sets that need bands in the channels image (`uni2h_inputs`; `lbp_sets`: `rgb` and `rgb_he` only — H and E are always written, so `he`, `h` and `e` change nothing here; the sets fastLBP computed are in `lbp.h5`), the bands of the channels image, the stain vectors (`stain_vectors`: method `slide` or `standard`, H, E and R = H × E in optical density, the angle between H and E and to the standard vectors, the number of stained pixels used, the share of their squared optical density in the H–E plane, and a `note` when the standard vectors had to be used or H and E are poorly separated), the H/E mapping and the share of pixels above it, and the `rgb_he` summary (median, 90th-percentile and largest share of optical density removed per tile; median change of R, G, B).
 * `<id>.rgb_he_qc.png`: the slide next to its version rebuilt from H and E only, how much each pixel changed (white = unchanged, darkest = 40 levels or more), and the tiles with the median, 90th-percentile and largest change.
 * `<id>.rgb_he_qc.tsv`: per extracted tile, `residual_share` (share of its optical density that `rgb_he` removes), `mean_abs_change` (mean change of R, G and B, in levels of 255) and `changed_fraction` (share of pixels where R, G or B moves by more than 10 levels).
 * `<id>.channels.tif` (with `--publish_images`): the channels image, 8 bits per band, bands in the order listed in `channels.json` (H, E; R, G, B for fastLBP's `rgb`; R_he, G_he, B_he = `rgb_he`).
@@ -27,7 +27,18 @@
 
 ## `<sample>/mpp<scale>/lbp/` — Output2b
 
-* `<id>.lbp.h5`: `/tile_id` and one block per channel, `/blocks/LBP_<channel>/X` (n × 1145 raw counts with the default radii; channels R, G, B, R_HE, G_HE, B_HE, H, E as requested by `--lbp_channels`; columns named `<channel>_r<R>_p<P>_u<code>`), with `--lbp_center` also `/blocks/LBP_CENTER_<channel>/X` (mean code vector of the central 2 × 2 pixels), and `/blocks/INTENSITY_HE/X` (n × 10). The exports group the channels into input sets: `LBP_RGB` (R, G, B), `LBP_RGB_HE` (R_he, G_he, B_he) and `LBP_HE` (H then E).
+* `<id>.lbp.h5`: `/tile_id` and one block per channel, `/blocks/LBP_<channel>/X` (n × 1145 raw counts with the default radii; channels R, G, B, R_HE, G_HE, B_HE, H, E as requested by `--lbp_channels`, each computed once; columns named `<channel>_r<R>_p<P>_u<code>`), with `--lbp_center` also `/blocks/LBP_CENTER_<channel>/X` (mean code vector of the central 2 × 2 pixels), and `/blocks/INTENSITY_HE/X` (n × 10). The file attribute `channel_sets` lists the input sets computed (JSON text, e.g. `["rgb", "rgb_he", "he", "h", "e"]`).
+* The exports, the QC page and the clustering build one **view** per input set from these blocks:
+
+  | view | input set | blocks, in this order | columns (default radii) |
+  |---|---|---|---|
+  | `LBP_RGB` | `rgb` | R, G, B of the slide | 3 × 1145 = 3435 |
+  | `LBP_RGB_HE` | `rgb_he` | R_he, G_he, B_he: R, G, B of the slide rebuilt from H and E only | 3435 |
+  | `LBP_HE` | `he` | H, then E (the stain amounts) | 2 × 1145 = 2290 |
+  | `LBP_H` | `h` | H (haematoxylin) alone | 1145 |
+  | `LBP_E` | `e` | E (eosin) alone | 1145 |
+
+  `LBP_HE`, `LBP_H` and `LBP_E` share the same H and E blocks: `LBP_HE` is `LBP_H` and `LBP_E` side by side. With `--lbp_center`, `LBP_CENTER_RGB`, … follow the same sets. Files written by tileparity 0.4.0 or earlier give the same views as before (`h` and `e` did not exist yet).
 * `<id>.lbp_qc.png`, `.tsv`: the share of each tile's pixels with an irregular pattern, per channel and radius (mean, 10th, 50th and 90th percentile over the extracted tiles).
 
 ## `<sample>/mpp<scale>/st/` — Output3
@@ -38,15 +49,17 @@
 
 * `<id>.clusters.tsv.gz`: one row per extracted tile: `tile_id`, `in_keep`, `in_extended` (the two tile sets) and the cluster of the tile in every clustering, in columns `<set>_<view>_<method>_k<k>` (e.g. `keep_UNI2H_RGB_leiden_k8`; empty for tiles outside the set). Clusters are numbered from 0, the largest, separately for every view and slide.
 * `<id>.cluster_agreement.tsv`: one row per pair of views, tile set, method and k: `set`, `method`, `k`, `view_a`, `view_b`, `n_tiles`, `k_a` and `k_b` (clusters actually reached), `ari`, `nmi`, `null_moves`, `null_ari_mean`, `null_ari_p05`, `null_ari_p50`, `null_ari_p95` and `p_null` (the spatial null; `NA` without a tile grid). Rows with `method` = `leiden_vs_kmeans` compare the two methods on the same view.
-* `<id>.cluster.json`: the parameters, and per tile set its definition, size, the values of k used, the reference view and, per view, the features, principal components, Leiden resolution and clusters reached for every k; the reason when a set or view was not clustered.
+* `<id>.cluster.json`: the parameters, `view_descriptions` (what each view is: `"LBP_H": "LBP histograms of the H (haematoxylin) amount alone"`, …), and per tile set its definition, size, the values of k used, the reference view and, per view, the features, principal components, Leiden resolution and clusters reached for every k; the reason when a set or view was not clustered.
 * `<id>.cluster_agreement_<set>.png`: ARI of every pair of views at `--cluster_k_ref` (Leiden and k-means; the grey diagonal compares the two methods on one view) and ARI of every view with the reference view for every k, with the spatial null.
 * `<id>.cluster_maps_<set>.png`: the clusters of every view on the slide, coloured after the matching clusters of the reference view (`EXPRESSION`, or `UNI2H_RGB` for slides without expression).
 * `<id>.cluster_contingency_keep.png`: for every view, where the tiles of each of its clusters fall among the reference view's clusters.
 
+The caption of every clustering figure ends with the list of the views it shows and what each one is (`Views: UNI2H_RGB = UNI2-h embedding of the slide (1536 values per tile); …`), so a figure can be read without this page.
+
 ## `export/mpp<scale>/`
 
-* `spe/<id>.rds` and `spe/combined_mpp<scale>.rds` — SpatialExperiment: `assay(spe, "counts")`, `colData(spe)` (tile table of the extracted tiles; with `--cluster` also the Leiden labels of the set `keep`, `cluster_<view>_leiden_k<k>`, text, `NA` outside the set), `spatialCoords(spe)` (tile centres, full-resolution px), `reducedDims(spe)` (`UNI2H_RGB`, `UNI2H_RGB_HE`, `LBP_RGB`, `LBP_RGB_HE`, `LBP_HE`, `LBP_CENTER_*`, `INTENSITY_HE`, those computed), `imgData(spe)` (thumbnail), `metadata(spe)$tileparity` (provenance — including `channels`, the content of `channels.json` with the stain vectors — and `lineage`, JSON text).
-* `anndata/<id>.h5ad` and `anndata/combined_mpp<scale>.h5ad` — AnnData: `X` (tiles × genes counts, int32 or float32), `obs` (tile table; with `--cluster` also `cluster_<view>_leiden_k<k>`, text, empty outside the set `keep`), `obsm` (`X_uni2h_rgb`, `X_uni2h_rgb_he`, `X_lbp_rgb`, `X_lbp_rgb_he`, `X_lbp_he`, `X_lbp_center_*`, `X_intensity_he`, `spatial`), `uns["spatial"]` (thumbnail and scale factor, compatible with `scanpy.pl.spatial`), `uns["tileparity"]` (column names, provenance, `lineage`).
+* `spe/<id>.rds` and `spe/combined_mpp<scale>.rds` — SpatialExperiment: `assay(spe, "counts")`, `colData(spe)` (tile table of the extracted tiles; with `--cluster` also the Leiden labels of the set `keep`, `cluster_<view>_leiden_k<k>`, text, `NA` outside the set), `spatialCoords(spe)` (tile centres, full-resolution px), `reducedDims(spe)` (`UNI2H_RGB`, `UNI2H_RGB_HE`, `LBP_RGB`, `LBP_RGB_HE`, `LBP_HE`, `LBP_H`, `LBP_E`, `LBP_CENTER_*`, `INTENSITY_HE`, those computed; the LBP views are in the table above), `imgData(spe)` (thumbnail), `metadata(spe)$tileparity` (provenance — including `channels`, the content of `channels.json` with the stain vectors — and `lineage`, JSON text).
+* `anndata/<id>.h5ad` and `anndata/combined_mpp<scale>.h5ad` — AnnData: `X` (tiles × genes counts, int32 or float32), `obs` (tile table; with `--cluster` also `cluster_<view>_leiden_k<k>`, text, empty outside the set `keep`), `obsm` (`X_uni2h_rgb`, `X_uni2h_rgb_he`, `X_lbp_rgb`, `X_lbp_rgb_he`, `X_lbp_he`, `X_lbp_h`, `X_lbp_e`, `X_lbp_center_*`, `X_intensity_he`, `spatial`), `uns["spatial"]` (thumbnail and scale factor, compatible with `scanpy.pl.spatial`), `uns["tileparity"]` (column names, provenance, `lineage`).
 * `*.lineage.json` — the lineage of each object, including the checksum of the object file.
 
 Both formats hold the same content. To write only one, add `--skip_anndata` or `--skip_spe`; [anndataR](https://bioconductor.org/packages/release/bioc/html/anndataR.html) converts between them (e.g. read an `.h5ad` in R as a SpatialExperiment), which may be the lighter option for large datasets.
@@ -57,11 +70,12 @@ spe <- spe[, spe$keep]                     # the default analysis set
 uni <- reducedDim(spe, "UNI2H_RGB")        # tiles x 1536, UNI2-h on the slide
 uni_he <- reducedDim(spe, "UNI2H_RGB_HE")  # tiles x 1536, UNI2-h on the slide rebuilt from H and E only
 lbp <- reducedDim(spe, "LBP_RGB") / 50176  # LBP frequencies (224 x 224 px tiles), R then G then B
+lbp_h <- reducedDim(spe, "LBP_H") / 50176  # with --lbp_channels ...,h: LBP of the H amount alone
 ```
 
 ## `qc/mpp<scale>/`
 
-With `--qc_umap`: `combined_mpp<scale>.qc_umap.html` (interactive 3-D UMAP of every view; works offline), `combined_mpp<scale>.qc_umap.tsv.gz` (the coordinates: `tile_id`, `view`, `umap1`–`umap3`) and its lineage.
+With `--qc_umap`: `combined_mpp<scale>.qc_umap.html` (interactive 3-D UMAP of every view, the LBP views of the table above included; works offline), `combined_mpp<scale>.qc_umap.tsv.gz` (the coordinates: `tile_id`, `view`, `umap1`–`umap3`) and its lineage.
 
 ## `pipeline_info/`
 

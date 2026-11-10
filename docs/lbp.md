@@ -6,15 +6,17 @@ This page explains, from the beginning, how `FASTLBP_EXTRACT` turns a tile into 
 
 ## 1. The input: one number per pixel
 
-LBP compares numbers, so it works on a single-channel image: one value from 0 to 255 per pixel. A colour image has three numbers per pixel, so LBP is computed on each channel of the image separately. The images are the **input sets** that UNI2-h reads too (`--lbp_channels`; Process 1b computes them once, see [design.md](design.md#the-input-images-of-both-extractors-1b)):
+LBP compares numbers, so it works on a single-channel image: one value from 0 to 255 per pixel. A colour image has three numbers per pixel, so LBP is computed on each channel of the image separately. The images are the **input sets** (`--lbp_channels`; Process 1b computes them once, see [design.md](design.md#the-input-images-of-both-extractors-1b)): `rgb` and `rgb_he` are the images UNI2-h reads too; `he`, `h` and `e` are the stain amounts, which only LBP can read, because it needs one channel and UNI2-h three:
 
 | set | channels | what a high value means |
 |---|---|---|
 | `rgb` (default) | R, G and B of the slide | more red, green or blue light |
 | `rgb_he` (default) | R_he, G_he and B_he: R, G and B of the slide rebuilt from haematoxylin and eosin only | the same, without the colour that is neither H nor E |
 | `he` (optional) | H (haematoxylin) and E (eosin) amounts, by colour deconvolution | more of that stain (H: nuclei; E: cytoplasm, stroma) |
+| `h` (optional) | H alone | more haematoxylin |
+| `e` (optional) | E alone | more eosin |
 
-Every channel is processed on its own, in exactly the same way. The rest of this page follows one channel.
+Every channel is processed on its own, in exactly the same way, and only once: `he`, `h` and `e` share the LBP of H and of E. The rest of this page follows one channel.
 
 ## 2. One pixel and one radius
 
@@ -120,7 +122,7 @@ One radius sees structures of one size. tileparity uses 13 radii, fastLBP's prog
 | 34 | 214 | 216 | 860 |
 | 45 | 283 | 285 | **1145** |
 
-1145 is not a multiple of 13 because every radius has a different number of points, so a different P + 2. Columns are named `<channel>_r<R>_p<P>_u<code>`, e.g. `R_r1_p7_u8` is the irregular bin of radius 1 in the R channel and `R_he_r1_p7_u8` the same bin in the R channel of the rebuilt image. An input set puts its channels side by side: `LBP_RGB` and `LBP_RGB_HE` have 3 × 1145 = 3435 columns each (R, G, B), `LBP_HE` 2 × 1145 = 2290 (H, then E). Input sets are alternatives to compare, never concatenated with each other.
+1145 is not a multiple of 13 because every radius has a different number of points, so a different P + 2. Columns are named `<channel>_r<R>_p<P>_u<code>`, e.g. `R_r1_p7_u8` is the irregular bin of radius 1 in the R channel and `R_he_r1_p7_u8` the same bin in the R channel of the rebuilt image. An input set puts its channels side by side: `LBP_RGB` and `LBP_RGB_HE` have 3 × 1145 = 3435 columns each (R, G, B), `LBP_HE` 2 × 1145 = 2290 (H, then E), `LBP_H` and `LBP_E` 1145 each. Input sets are alternatives to compare, never concatenated with each other.
 
 ## 5. Things to keep in mind when using the vector
 

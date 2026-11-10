@@ -15,8 +15,9 @@ tiles are clustered:
   ``--min_tissue_extract`` (= ``--min_tissue``) it differs from ``keep`` only by the counts
   floor; a set with exactly the tiles of ``keep`` is not clustered twice.
 
-Views (those computed): UNI2H_RGB, UNI2H_RGB_HE, LBP_RGB, LBP_RGB_HE, LBP_HE, INTENSITY_HE
-and EXPRESSION. Preparation, then PCA (``--cluster_n_pcs`` components):
+Views (those computed): UNI2H_RGB, UNI2H_RGB_HE, LBP_RGB, LBP_RGB_HE, LBP_HE, LBP_H, LBP_E,
+INTENSITY_HE and EXPRESSION (what each one is: ``VIEW_DESCRIPTIONS``). Preparation, then PCA
+(``--cluster_n_pcs`` components):
 
 * UNI2-h and INTENSITY_HE: every column standardised (z-score over the set's tiles);
 * LBP: proportions, square root (Hellinger) and the same weight for every channel and
@@ -58,7 +59,20 @@ import pandas as pd
 
 from . import qcumap
 
-VIEWS = ("UNI2H_RGB", "UNI2H_RGB_HE", "LBP_RGB", "LBP_RGB_HE", "LBP_HE", "INTENSITY_HE", "EXPRESSION")
+VIEWS = ("UNI2H_RGB", "UNI2H_RGB_HE", "LBP_RGB", "LBP_RGB_HE", "LBP_HE", "LBP_H", "LBP_E", "INTENSITY_HE",
+         "EXPRESSION")
+# what every view is (figure captions and cluster.json)
+VIEW_DESCRIPTIONS = {
+    "UNI2H_RGB": "UNI2-h embedding of the slide (1536 values per tile)",
+    "UNI2H_RGB_HE": "UNI2-h embedding of the slide rebuilt from H and E only",
+    "LBP_RGB": "LBP histograms of R, G and B of the slide",
+    "LBP_RGB_HE": "LBP histograms of R, G and B of the slide rebuilt from H and E only",
+    "LBP_HE": "LBP histograms of the H and E amounts (two channels)",
+    "LBP_H": "LBP histograms of the H (haematoxylin) amount alone",
+    "LBP_E": "LBP histograms of the E (eosin) amount alone",
+    "INTENSITY_HE": "mean, SD and 10th, 50th and 90th percentiles of the H and E amounts (no texture)",
+    "EXPRESSION": "gene expression of the tile",
+}
 METHODS = ("leiden", "kmeans")
 SETS = ("keep", "extended")
 DEFAULT_K = (2, 3, 4, 6, 8, 10, 12, 15)

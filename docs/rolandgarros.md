@@ -22,7 +22,7 @@ $TP/
 ├── models/uni2h/    the UNI2-h weights (2.7 GB)
 ├── data/            HEST and Visium HD files (~10 GB for these two samples)
 └── runs/<name>/     one folder per run: its job script, job log, Nextflow's log, work/ (tens of GB;
-                     can be deleted after a successful run) and results/
+                     keep it while later runs may reuse its tasks, sections 10-11) and results/
 ```
 
 ## 1. Log in and check the machine (5 minutes)
@@ -211,7 +211,7 @@ Paths are relative to `$TP/runs/two_samples/results/`.
 5. `lbp/<id>.lbp_qc.png`: the share of irregular LBP patterns per radius on real tissue (which radii carry information).
 6. `qc/mpp0.5000/combined_mpp0.5000.qc_umap.html` (copy it to your laptop, e.g. with `scp`, and open it in a browser): do the two samples separate in every view (batch effect) or only in some, and does `rgb_he` change that?
 7. `st/<id>.aggregate.json` and `counts_summary.tsv`: share of molecules in the tiles, counts per tile.
-8. `export/mpp0.5000/spe/combined_mpp0.5000.rds` loads in R (`reducedDimNames(spe)` lists `UNI2H_RGB`, `UNI2H_RGB_HE`, `LBP_RGB`, `LBP_RGB_HE`, `INTENSITY_HE`), and `metadata(spe)$tileparity$lineage` names the original images.
+8. `export/mpp0.5000/spe/combined_mpp0.5000.rds` loads in R (`reducedDimNames(spe)` lists `UNI2H_RGB`, `UNI2H_RGB_HE`, `LBP_RGB`, `LBP_RGB_HE`, `INTENSITY_HE`, and after section 11 also `LBP_HE`, `LBP_H`, `LBP_E`), and `metadata(spe)$tileparity$lineage` names the original images.
 
 ## 9. If something fails
 
@@ -245,6 +245,50 @@ The Python environment gains one package (igraph, for Leiden), so Nextflow creat
 
 For the whole cohort, use a new folder (`$TP/runs/cohort`) with the full samplesheet and the same job script without `--scales_mpp 0.5`, so that the default scales are used (0.2857, 0.5 and 1.0 µm/px; slides scanned more coarsely than 0.2857 µm/px skip that scale with a warning).
 
+## 11. LBP on the stain amounts (`he`, `h`, `e`; tileparity 0.4.1 or later)
+
+UNI2-h needs three channels, so by default fastLBP reads the same three-channel images (`rgb`, `rgb_he`). LBP reads one channel at a time, so it can also read the amounts of haematoxylin and eosin themselves: `he` (H and E side by side, view `LBP_HE`), `h` (H alone, `LBP_H`) and `e` (E alone, `LBP_E`). Comparing them with `LBP_RGB_HE` shows how much fastLBP loses by reading the images made for UNI2-h ([design.md](design.md#the-input-images-of-both-extractors-1b), [faq.md](faq.md#what-each-extractor-receives)). To add them to the run of sections 7 and 10 without starting again:
+
+```bash
+source $HOME/tileparity/env.sh
+git -C $TP/tileparity pull               # update the code; do not clone it again (a new clone runs everything again)
+git -C $TP/tileparity log -1 --oneline   # "tileparity 0.4.1: ..." or later
+cd $TP/runs/two_samples
+ls -d work .nextflow                     # both must still exist: they hold the finished tasks
+nano run.sbatch                          # the two changes below; save with Ctrl+O and Enter, leave with Ctrl+X
+sbatch run.sbatch                        # prints the job number
+```
+
+In the `nextflow run` command of `run.sbatch`, and nothing else:
+
+1. add `--lbp_channels rgb,rgb_he,he,h,e` (for example after `--cluster`, on the same line);
+2. replace `--outdir results` with `--outdir results_v0.4.1`: the results of 0.4.0 stay as they are, and the new folder gets a complete set (the reused tasks copy their files there too).
+
+Keep `-resume`: Nextflow reuses every task whose inputs, command and software did not change. The new sets change neither the input images nor UNI2-h, so:
+
+| reused (no time, no GPU) | run again |
+|---|---|
+| `TILEPARITY_PREPARE`, `TILEPARITY_CHANNELS`, `UNI2H_EMBED`, `TILEPARITY_AGGREGATEST` | `FASTLBP_EXTRACT` (8 channels instead of 6), `TILEPARITY_CLUSTER`, `TILEPARITY_EXPORTSPE`, `TILEPARITY_EXPORTANNDATA`, `TILEPARITY_QCUMAP` |
+
+The software environments do not change. With the two samples at 0.5 µm/px it takes about 20–30 minutes: in the 0.4.0 run fastLBP took 3.5 (ZEN36) and 7.5 minutes (A_P1_CRC), and it now has a third more channels. To follow it:
+
+```bash
+squeue -u $USER                          # R = running, PD = waiting
+tail -f tp_two_<jobid>.log               # Ctrl+C stops watching, not the job
+grep -c "Cached process" .nextflow.log   # the reused tasks: 8 (4 processes x 2 samples)
+```
+
+The job log lists only the tasks that run (`[PROCESS ..] ...:FASTLBP_EXTRACT (A_P1_CRC_mpp0.5000)`, …) and ends with `completed=7 failed=0 cached=8`. If `TILEPARITY_PREPARE` or `UNI2H_EMBED` appear among them, the earlier tasks could not be reused (`work/` deleted, a new clone, another option changed); the results are still complete, it only takes as long as the first run.
+
+What is new in `results_v0.4.1/`:
+
+1. `<sample>/mpp0.5000/cluster/<id>.cluster_agreement_keep.png`: the heatmaps have rows and columns for `LBP_HE`, `LBP_H` and `LBP_E`, and the curves a line for each. The question: do they agree more with `EXPRESSION` than `LBP_RGB_HE` does, at k = 8 and over k, above the spatial null and with both methods? The caption ends with the list of views and what each one is.
+2. `<id>.cluster_maps_keep.png`: the clusters of the new views on the slide; `<id>.cluster_agreement.tsv` and `clusters.tsv.gz`: the numbers and the labels; `<id>.cluster.json`: `view_descriptions`, what each view is.
+3. `qc/mpp0.5000/combined_mpp0.5000.qc_umap.html`: the 3-D UMAP of the new views.
+4. `export/mpp0.5000/`: `reducedDims(spe)` and `adata.obsm` add `LBP_HE`, `LBP_H`, `LBP_E` (`X_lbp_he`, `X_lbp_h`, `X_lbp_e`); [output.md](output.md#samplemppscalelbp--output2b) has the table of LBP views.
+
+The `*.lineage.json` of the reused steps (prepare, channels, uni2h, st) keep `"tileparity_version": "0.4.0"`, those of the steps run again say 0.4.1. This is correct: those files were made by 0.4.0, and 0.4.1 computes them in the same way. `pipeline_info/` has the report of this run, with the reused tasks marked as cached.
+
 ## Route B: containers (Apptainer or Singularity)
 
 If Apptainer or Singularity becomes available on the login node and the compute nodes, Nextflow can run on the login node and send every task to SLURM as its own job, each in the pipeline's container image (no environments to create):
@@ -257,4 +301,4 @@ nextflow run $TP/tileparity -profile uzh_rolandgarros,apptainer \
     --scales_mpp 0.5 --mask_compare --min_tissue_extract 0.3 --qc_umap
 ```
 
-Run it in `tmux` on the login node (Nextflow must keep running while the jobs run). The jobs go to the default partition (`main`) and the UNI2-h job asks for `--gres=gpu:1`; `--slurm_queue`, `--slurm_gpu_queue` and `--slurm_gpu_options` change that. `conf/uzh_rolandgarros.config` sets the SLURM executor, the resource ceilings (64 CPUs, 400 GB, 72 h per task) and the GPU request; the images (`ghcr.io/miguelrosell/tileparity-{python,uni2h,r}:0.4.0`) are public and pulled once into `~/.cache/tileparity/apptainer`. The same profile also works with conda (`-profile uzh_rolandgarros,conda`) when the login node has conda and internet access.
+Run it in `tmux` on the login node (Nextflow must keep running while the jobs run). The jobs go to the default partition (`main`) and the UNI2-h job asks for `--gres=gpu:1`; `--slurm_queue`, `--slurm_gpu_queue` and `--slurm_gpu_options` change that. `conf/uzh_rolandgarros.config` sets the SLURM executor, the resource ceilings (64 CPUs, 400 GB, 72 h per task) and the GPU request; the images (`ghcr.io/miguelrosell/tileparity-{python,uni2h,r}:0.4.1`) are public and pulled once into `~/.cache/tileparity/apptainer`. The same profile also works with conda (`-profile uzh_rolandgarros,conda`) when the login node has conda and internet access.

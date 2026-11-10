@@ -35,9 +35,10 @@ Yes. Process 1b computes the input images once, and each extractor reads the sam
 
 * `rgb`: the resampled slide as it is;
 * `rgb_he`: the same slide rebuilt from haematoxylin and eosin only — every pixel's colour replaced by the closest colour made of the two stains;
-* `he` (fastLBP only, off by default): the amounts of H and of E as two single-channel images.
+* `he` (fastLBP only, off by default): the amounts of H and of E as two single-channel images;
+* `h` and `e` (fastLBP only, off by default): the amount of H alone, and of E alone.
 
-UNI2-h reads each set as an RGB image; fastLBP computes one LBP per channel of it (R, G, B; R_he, G_he, B_he; H, E). Each set gives its own blocks (`UNI2H_RGB`, `UNI2H_RGB_HE`, `LBP_RGB`, `LBP_RGB_HE`, `LBP_HE`), so the two extractors can be compared on identical input, and `rgb` with `rgb_he` within each extractor.
+UNI2-h reads each set as an RGB image; fastLBP computes one LBP per channel of it (R, G, B; R_he, G_he, B_he; H, E). Each set gives its own blocks (`UNI2H_RGB`, `UNI2H_RGB_HE`, `LBP_RGB`, `LBP_RGB_HE`, `LBP_HE`, `LBP_H`, `LBP_E`), so the two extractors can be compared on identical input, and `rgb` with `rgb_he` within each extractor.
 
 **What exactly does fastLBP receive (Input2b)?**
 An image, not precomputed features: a tiled TIFF with one 8-bit band (0–255) per channel (H and E always, R, G, B for `rgb`, R_he, G_he, B_he for `rgb_he`; the order is in `channels.json`), computed pixel by pixel from the resampled RGB image, plus the tile table. `FASTLBP_EXTRACT` reads each extracted tile together with a margin, so border pixels are compared with their real neighbours. It then computes the LBP codes and the histograms of the channels of the chosen input sets with fastLBP's kernel ([lbp.md](lbp.md)).
@@ -55,6 +56,9 @@ The part of each pixel's colour that two stains cannot explain: pen marks, pigme
 
 **Why not give UNI2-h the H and E channels themselves?**
 UNI2-h takes exactly three channels (its first layer embeds 14 × 14 px patches of R, G and B) and was trained on ordinary RGB H&E images. H, E and a third channel as an image would look like nothing it has seen. `rgb_he` contains only H and E information but is still an ordinary-looking H&E image, so UNI2-h can read it, and fastLBP reads exactly the same pixels.
+
+**Did reading the images made for UNI2-h cost fastLBP anything?**
+That is what `he`, `h` and `e` measure. UNI2-h needs three channels, so the H&E-only image it reads is rebuilt as R_he, G_he and B_he, each computed from both stain amounts at once; fastLBP reads one channel at a time and can read the amounts themselves. Run with `--lbp_channels rgb,rgb_he,he,h,e` and `--cluster`, and compare `LBP_HE`, `LBP_H` and `LBP_E` with `LBP_RGB_HE` in `cluster_agreement_keep.png` (their agreement with `EXPRESSION` at the same k, against the spatial null). A view on the stain amounts that agrees clearly more with expression (at several k, above the null, with both methods) means the three-channel images cost fastLBP information; similar values mean they did not. `LBP_H` against `LBP_E` shows which stain's texture follows expression more closely. A finished run can add these sets with `-resume`: only fastLBP and the steps after it run again ([rolandgarros.md](rolandgarros.md#11-lbp-on-the-stain-amounts-he-h-e-tileparity-041-or-later)).
 
 **Where do the H and E colours come from?**
 By default each slide's own (`--stain_vectors slide`): estimated from about a million pixels of its extracted tiles with the method of Macenko et al. (2009), because stain colours vary between laboratories and scanners. `--stain_vectors standard` uses Ruifrok and Johnston's published vectors for every slide. The vectors used are in `channels.json`, in the caption of the QC figure and in the lineage.

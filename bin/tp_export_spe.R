@@ -19,8 +19,8 @@
 #   assay "counts"     genes x tiles (sum of Visium HD bins, Visium spots split by area, or the spot)
 #   colData            the tile table (QC metrics, sample metadata, ...)
 #   spatialCoords      tile centre in full-resolution pixels (pxl_col_in_fullres, pxl_row_in_fullres)
-#   reducedDims        UNI2H_RGB, UNI2H_RGB_HE (1536 each), LBP_RGB, LBP_RGB_HE, LBP_HE, LBP_CENTER_*,
-#                      INTENSITY_HE (those computed)
+#   reducedDims        UNI2H_RGB, UNI2H_RGB_HE (1536 each), LBP_RGB, LBP_RGB_HE, LBP_HE, LBP_H, LBP_E,
+#                      LBP_CENTER_*, INTENSITY_HE (those computed)
 #   imgData            the thumbnail, with its scale factor to full-resolution pixels
 #   metadata$tileparity provenance (parameters, model, LBP radii, ...) and the lineage (JSON text)
 
@@ -63,13 +63,34 @@ NUMERIC_COLUMNS <- c("scale_mpp", "tile_px", "tile_um", "row", "col", "x0_px", "
                      "n_st_units", "st_units_equiv", "lapvar", "pen_fraction", "dark_fraction")
 BOOL_COLUMNS <- c("inside_image", "blur_flag", "pen_flag", "dark_flag", "extract", "keep")
 # blocks of one input set are joined; different input sets stay separate alternatives
+# (the same views as COMBINED_BLOCKS in tileparity_lib/export.py)
 COMBINED_BLOCKS <- list(
     LBP_RGB = c("LBP_R", "LBP_G", "LBP_B"), LBP_RGB_HE = c("LBP_R_HE", "LBP_G_HE", "LBP_B_HE"),
-    LBP_HE = c("LBP_H", "LBP_E"),
+    LBP_HE = c("LBP_H", "LBP_E"), LBP_H = "LBP_H", LBP_E = "LBP_E",
     LBP_CENTER_RGB = c("LBP_CENTER_R", "LBP_CENTER_G", "LBP_CENTER_B"),
     LBP_CENTER_RGB_HE = c("LBP_CENTER_R_HE", "LBP_CENTER_G_HE", "LBP_CENTER_B_HE"),
-    LBP_CENTER_HE = c("LBP_CENTER_H", "LBP_CENTER_E"), INTENSITY_HE = "INTENSITY_HE"
+    LBP_CENTER_HE = c("LBP_CENTER_H", "LBP_CENTER_E"), LBP_CENTER_H = "LBP_CENTER_H", LBP_CENTER_E = "LBP_CENTER_E",
+    INTENSITY_HE = "INTENSITY_HE"
 )
+# the LBP input set of each view: a view is built only if its set was computed (attribute
+# channel_sets of lbp.h5, written since 0.2; files without it get no LBP_H, LBP_E)
+VIEW_SET <- c(LBP_RGB = "rgb", LBP_RGB_HE = "rgb_he", LBP_HE = "he", LBP_H = "h", LBP_E = "e",
+              LBP_CENTER_RGB = "rgb", LBP_CENTER_RGB_HE = "rgb_he", LBP_CENTER_HE = "he", LBP_CENTER_H = "h",
+              LBP_CENTER_E = "e")
+
+lbp_views <- function(block_names, channel_sets = NULL) {
+    out <- list()
+    for (name in names(COMBINED_BLOCKS)) {
+        s <- if (name %in% names(VIEW_SET)) VIEW_SET[[name]] else NA
+        if (!is.na(s)) {
+            if (is.null(channel_sets) && s %in% c("h", "e")) next
+            if (!is.null(channel_sets) && !(s %in% channel_sets)) next
+        }
+        parts <- COMBINED_BLOCKS[[name]]
+        if (all(parts %in% block_names)) out[[name]] <- parts
+    }
+    out
+}
 
 # Same typing rules as tileparity_lib.tiling.read_tiles(): numbers, booleans, everything else text
 read_tiles <- function(path) {
@@ -204,10 +225,10 @@ build_spe <- function(dir, prefix) {
     }
     if (file.exists(f(".lbp.h5"))) {
         l <- read_features(f(".lbp.h5"), tile_ids)
-        for (name in names(COMBINED_BLOCKS)) {
-            parts <- COMBINED_BLOCKS[[name]]
-            if (all(parts %in% names(l$blocks))) rd[[name]] <- do.call(cbind, unname(l$blocks[parts]))
-        }
+        sets <- l$attrs$channel_sets
+        if (!is.null(sets)) sets <- as.character(unlist(fromJSON(sets)))
+        views <- lbp_views(names(l$blocks), sets)
+        for (name in names(views)) rd[[name]] <- do.call(cbind, unname(l$blocks[views[[name]]]))
         provenance$lbp <- l$attrs
     }
     cnt <- read_counts(f(".counts.h5"), tile_ids)

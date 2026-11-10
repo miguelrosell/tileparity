@@ -24,19 +24,47 @@ from .tiling import read_tiles
 
 log = logging.getLogger(__name__)
 
-# blocks in lbp.h5  ->  name in the exported objects (the channels of one input set are
-# joined; different input sets stay separate alternatives). The blocks of uni2h.h5
-# (UNI2H_RGB, UNI2H_RGB_HE) are exported as they are.
+# blocks in lbp.h5 (one per channel)  ->  view in the exported objects, one per input set
+# (the channels of one input set are joined; different input sets stay separate
+# alternatives). The one-channel sets h and e give views with the name of their channel
+# block. The blocks of uni2h.h5 (UNI2H_RGB, UNI2H_RGB_HE) are exported as they are.
 COMBINED_BLOCKS = {
     "LBP_RGB": ("LBP_R", "LBP_G", "LBP_B"),
     "LBP_RGB_HE": ("LBP_R_HE", "LBP_G_HE", "LBP_B_HE"),
     "LBP_HE": ("LBP_H", "LBP_E"),
+    "LBP_H": ("LBP_H",),
+    "LBP_E": ("LBP_E",),
     "LBP_CENTER_RGB": ("LBP_CENTER_R", "LBP_CENTER_G", "LBP_CENTER_B"),
     "LBP_CENTER_RGB_HE": ("LBP_CENTER_R_HE", "LBP_CENTER_G_HE", "LBP_CENTER_B_HE"),
     "LBP_CENTER_HE": ("LBP_CENTER_H", "LBP_CENTER_E"),
+    "LBP_CENTER_H": ("LBP_CENTER_H",),
+    "LBP_CENTER_E": ("LBP_CENTER_E",),
     "INTENSITY_HE": ("INTENSITY_HE",),
 }
+# the LBP input set of each view: a view is built only if its set was computed (attribute
+# channel_sets of lbp.h5), so that 'he' alone does not also give LBP_H and LBP_E
+VIEW_SET = {"LBP_RGB": "rgb", "LBP_RGB_HE": "rgb_he", "LBP_HE": "he", "LBP_H": "h", "LBP_E": "e",
+            "LBP_CENTER_RGB": "rgb", "LBP_CENTER_RGB_HE": "rgb_he", "LBP_CENTER_HE": "he", "LBP_CENTER_H": "h",
+            "LBP_CENTER_E": "e"}
 LINEAGE_STEPS = ("cluster", "uni2h", "lbp", "st", "prepare")
+
+
+def lbp_views(raw_blocks, channel_sets=None) -> dict:
+    """{view: its channel blocks} for the views an lbp.h5 file supports: every channel
+    block present and, when the file records its input sets (``channel_sets``, written since
+    tileparity 0.2), the view's set among them. Files of 0.4.0 and earlier give the views they
+    gave then: their sets never include h or e, and files without the record get no LBP_H, LBP_E."""
+    out = {}
+    for name, parts in COMBINED_BLOCKS.items():
+        s = VIEW_SET.get(name)
+        if s is not None:
+            if channel_sets is None and s in ("h", "e"):
+                continue
+            if channel_sets is not None and s not in channel_sets:
+                continue
+        if all(p in raw_blocks for p in parts):
+            out[name] = parts
+    return out
 
 
 def discover(directory: str | Path) -> list[str]:
@@ -87,9 +115,8 @@ def load_sample(directory: str | Path, prefix: str) -> dict:
     lbp_path = d / f"{prefix}.lbp.h5"
     if lbp_path.exists():
         raw = aligned(lbp_path, "lbp")
-        for out_name, parts in COMBINED_BLOCKS.items():
-            if all(p in raw for p in parts):
-                blocks[out_name] = (np.hstack([raw[p][0] for p in parts]), np.concatenate([raw[p][1] for p in parts]))
+        for out_name, parts in lbp_views(raw, provenance["lbp"].get("channel_sets")).items():
+            blocks[out_name] = (np.hstack([raw[p][0] for p in parts]), np.concatenate([raw[p][1] for p in parts]))
 
     counts_path = d / f"{prefix}.counts.h5"
     if counts_path.exists():

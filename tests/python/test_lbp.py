@@ -113,7 +113,7 @@ def test_extract_with_input_sets_and_center(tmp_path):
     T = 32
     rng = np.random.default_rng(7)
     rgb = rng.integers(0, 256, size=(3 * T, 3 * T, 3), dtype=np.uint8)
-    sets = ["rgb", "rgb_he", "he"]
+    sets = ["rgb", "rgb_he", "he", "h", "e"]
     bands = channels.band_order(sets)
     assert bands == ["H", "E", "R", "G", "B", "R_he", "G_he", "B_he"]
     arr = channels.rgb_to_channels_numpy(rgb, 0.3, 0.15, bands)
@@ -124,7 +124,7 @@ def test_extract_with_input_sets_and_center(tmp_path):
 
     tiles = pd.DataFrame({"x0_px": [T], "y0_px": [T]})
     chans = channels.lbp_channels(sets)
-    assert chans == ["R", "G", "B", "R_he", "G_he", "B_he", "H", "E"]
+    assert chans == ["R", "G", "B", "R_he", "G_he", "B_he", "H", "E"]  # h and e reuse the H and E of he
     spec = lbp.LbpSpec(radii=[1, 2], npoints=[7, 13], channels=chans, tile_px=T, bands=bands, center=True)
     out = lbp.extract(str(path), tiles, spec, ncpus=1)
     assert set(out) == {*chans, *(f"center_{c}" for c in chans), "intensity"}

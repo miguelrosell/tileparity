@@ -4,7 +4,7 @@ One interactive HTML page per scale (plotly; it can be rotated, zoomed and hover
 works offline) with one 3-D UMAP per view, coloured by sample or by a QC column:
 
 * ``UNI2H_RGB``, ``UNI2H_RGB_HE``: columns standardised (z-scores), then PCA.
-* ``LBP_RGB``, ``LBP_RGB_HE``, ``LBP_HE``: the analysis recipe for LBP histograms. Each
+* ``LBP_RGB``, ``LBP_RGB_HE``, ``LBP_HE``, ``LBP_H``, ``LBP_E``: the analysis recipe for LBP histograms. Each
   radius block of each channel is turned into proportions (divided by the tile's pixel
   count, so it sums to 1), square-rooted (Hellinger transform, so that a few large bins
   such as the irregular one do not dominate distances), and divided by the square root
@@ -29,10 +29,11 @@ import pandas as pd
 # LBP column names: <channel>_r<R>_p<P>_u<code>, e.g. R_r3_p19_u4 or R_he_r3_p19_u4
 COLUMN_RE = re.compile(r"^(?:center_)?(?P<ch>[A-Za-z][A-Za-z_]*?)_r(?P<r>\d+)_p(?P<p>\d+)_u(?P<u>\d+)$")
 UNI2H_VIEWS = ("UNI2H_RGB", "UNI2H_RGB_HE")
-LBP_VIEWS = ("LBP_RGB", "LBP_RGB_HE", "LBP_HE")
+LBP_VIEWS = ("LBP_RGB", "LBP_RGB_HE", "LBP_HE", "LBP_H", "LBP_E")
 VIEW_INPUT = {"UNI2H_RGB": "the slide", "UNI2H_RGB_HE": "the slide rebuilt from H and E only",
               "LBP_RGB": "R, G, B of the slide", "LBP_RGB_HE": "R, G, B of the slide rebuilt from H and E only",
-              "LBP_HE": "the H and E amounts"}
+              "LBP_HE": "the H and E amounts", "LBP_H": "the H (haematoxylin) amount alone",
+              "LBP_E": "the E (eosin) amount alone"}
 
 
 def lbp_recipe(X: np.ndarray, columns, tile_px: int) -> np.ndarray:

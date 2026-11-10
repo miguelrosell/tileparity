@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.4.1 (2026-11-10)
+
+LBP on the stain amounts themselves. UNI2-h needs three channels, so fastLBP has read the same three-channel images (`rgb`, `rgb_he`); LBP reads one channel at a time and can read the amounts of H and E directly. The new input sets measure how much fastLBP loses by reading the images made for UNI2-h.
+
+**Input sets `h` and `e` (fastLBP only)**
+
+* `--lbp_channels` takes `h` (the H amount alone, view `LBP_H`, 1145 columns) and `e` (the E amount alone, `LBP_E`), besides `he` (H and E side by side, `LBP_HE`, 2290 columns). The LBP of H and of E is computed once, whichever of the three are asked for. Default unchanged (`rgb,rgb_he`); the test profile uses `rgb,rgb_he,he,h,e`.
+* The views follow the input sets recorded in `lbp.h5` (attribute `channel_sets`): `he` alone gives `LBP_HE` only, `h` alone `LBP_H` only. The exports (`reducedDims(spe)`: `LBP_H`, `LBP_E`, `LBP_CENTER_H`, `LBP_CENTER_E`; `adata.obsm`: `X_lbp_h`, `X_lbp_e`, …), the 3-D UMAP and the clustering (`--cluster_views` accepts `LBP_H`, `LBP_E`) include them. Files of earlier versions give the same views as before.
+* Process 1b receives only the input sets that add bands to the channels image (`rgb`, `rgb_he`): H and E are always written, so `he`, `h` and `e` change neither the channels image nor its task. A finished run can therefore add them with `-resume`, and only fastLBP, the clustering, the exports and the QC page run again; Process 1, Process 1b, UNI2-h and the expression are reused (checked with Nextflow 26.10.3 on the test profile: 36 tasks reused, 22 run). `channels.json` (`lbp_sets`) lists only those sets; the sets fastLBP computed are in `lbp.h5` and in its lineage.
+
+**Knowing what each view is**
+
+* The caption of every clustering figure ends with the views it shows and what each one is (`Views: UNI2H_RGB = UNI2-h embedding of the slide (1536 values per tile); …`); `cluster.json` has the same in `view_descriptions`. New colours for `LBP_H` and `LBP_E` in the curves.
+* `docs/output.md` has a table of the LBP views (input set, blocks, columns); `docs/design.md` explains why `he`, `h` and `e` exist and what they answer; `docs/rolandgarros.md` has a new section 11 to add them to the finished run on the server (new `--outdir results_v0.4.1`, what is reused, what is new where); README, `docs/usage.md`, `docs/lbp.md` and `docs/faq.md` describe them.
+
+**Other changes**
+
+* No change to the software environments (`-profile conda` creates nothing again); container images 0.4.1. Unit tests for the new sets, views and captions (100 in all).
+
 ## 0.4.0 (2026-10-29)
 
 How much do the feature views agree? An optional clustering step, agreed after the first run on real data (two samples on the UZH server with 0.3.0).

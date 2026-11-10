@@ -21,8 +21,8 @@ from .figures import BG, INK, MUTED, plain, text_width
 
 # one colour per view, the same in every figure
 VIEW_COLOURS = {"UNI2H_RGB": (0, 114, 178), "UNI2H_RGB_HE": (86, 180, 233), "LBP_RGB": (213, 94, 0),
-                "LBP_RGB_HE": (230, 159, 0), "LBP_HE": (204, 121, 167), "INTENSITY_HE": (0, 158, 115),
-                "EXPRESSION": (0, 0, 0)}
+                "LBP_RGB_HE": (230, 159, 0), "LBP_HE": (204, 121, 167), "LBP_H": (117, 77, 160),
+                "LBP_E": (160, 30, 80), "INTENSITY_HE": (0, 158, 115), "EXPRESSION": (0, 0, 0)}
 # cluster colours: strong colours first, then their light versions (Tableau 20 without grey)
 CLUSTER_COLOURS = [(31, 119, 180), (255, 127, 14), (44, 160, 44), (214, 39, 40), (148, 103, 189), (140, 86, 75),
                    (227, 119, 194), (188, 189, 34), (23, 190, 207), (174, 199, 232), (255, 187, 120),

@@ -119,8 +119,19 @@ def test_input_sets_are_validated():
     with pytest.raises(ValueError):
         channels.parse_sets("he", channels.UNI2H_INPUTS)  # UNI2-h reads 3-channel images only
     with pytest.raises(ValueError):
-        channels.parse_sets("H,E")
+        channels.parse_sets("R,G")  # channels are not input sets
+    assert channels.parse_sets("H,E") == ["h", "e"]  # the one-stain sets (case does not matter)
     assert channels.lbp_channels(["he", "rgb_he"]) == ["R_he", "G_he", "B_he", "H", "E"]
+    # h and e: one stain each; a channel shared by several sets is computed once
+    assert channels.parse_sets("e, h, he") == ["he", "h", "e"]
+    assert channels.lbp_channels(["e", "h", "he"]) == ["H", "E"]
+    assert channels.lbp_channels(["h", "rgb"]) == ["R", "G", "B", "H"]
+    with pytest.raises(ValueError):
+        channels.parse_sets("h", channels.UNI2H_INPUTS)
+    assert [channels.LBP_SET_VIEWS[s] for s in channels.LBP_SETS] == ["LBP_RGB", "LBP_RGB_HE", "LBP_HE", "LBP_H", "LBP_E"]
+    # he, h and e add no bands: the channels image depends only on rgb and rgb_he (BAND_SETS)
+    assert channels.band_order(["rgb", "rgb_he", "he", "h", "e"]) == channels.band_order(["rgb", "rgb_he"])
+    assert channels.band_order(["h", "e"]) == ["H", "E"] and set(channels.BAND_SETS) == {"rgb", "rgb_he"}
     assert channels.band_order(["rgb"], ["rgb_he"]) == ALL_BANDS
     assert channels.band_order(["he"], ["rgb"]) == ["H", "E"]
     assert channels.band_order([], ["rgb", "rgb_he"]) == ["H", "E", "R_he", "G_he", "B_he"]

@@ -37,6 +37,12 @@ def integers(text: str) -> list[int]:
     return out
 
 
+def views_text(info: dict) -> str:
+    """What every clustered view of a tile set is, for the captions."""
+    done = [v for v in cluster.VIEWS if info.get("views", {}).get(v, {}).get("status") == "clustered"]
+    return "Views: " + "; ".join(f"{v} = {cluster.VIEW_DESCRIPTIONS[v]}" for v in done) + "." if done else ""
+
+
 def captions(info: dict, set_name: str, args, ref: str, source: str, mask_mpp) -> dict:
     """The four-part explanations of the figures of one tile set."""
     n, k_ref = info["n_tiles"], info["k_ref"]
@@ -71,7 +77,7 @@ def captions(info: dict, set_name: str, args, ref: str, source: str, mask_mpp) -
                  f"'{set_name}': {info['definition']}. Every view was clustered on its own: PCA (at most "
                  f"{args.n_pcs} components), then Leiden on the graph of the {args.n_neighbors} nearest neighbours, "
                  "with the resolution searched until the partition has exactly k clusters, and k-means with the same "
-                 f"k ({methods} here). {top}. {bottom}."),
+                 f"k ({methods} here). {top}. {bottom}. {views_text(info)}"),
         "how": how,
         "caveats": ("The clustering ignores where the tiles are (no spatial smoothing) and uses one random seed. ARI "
                     "depends on k and on the cluster sizes, so views are only compared at the same k: points where "
@@ -85,7 +91,7 @@ def captions(info: dict, set_name: str, args, ref: str, source: str, mask_mpp) -
         "what": (f"The {n} tiles of the set '{set_name}' coloured by their cluster ({name}, k = {k_ref}) in every "
                  f"view, each view clustered on its own, over the faded {thumb}. Colours follow the clusters of {ref}: "
                  f"the clusters of every other view take the colour of the {ref} cluster they share most tiles with "
-                 "(one-to-one matching), so the same colour in two maps marks matched clusters."),
+                 "(one-to-one matching), so the same colour in two maps marks matched clusters. " + views_text(info)),
         "how": ("Where two maps show the same colours in the same places, the two views divide the tissue in the same "
                 "way. A region that only one view separates is something that view sees and the others do not. A "
                 "salt-and-pepper map without coherent regions groups tiles by something that changes from tile to "
@@ -184,6 +190,8 @@ def main(argv=None):
         "scale_mpp": prep.get("mpp_target"),
         "parameters": {k: v for k, v in vars(args).items() if k not in ("input_dir", "lineage_parent", "process")},
         "sets": result["sets"],
+        "view_descriptions": {v: cluster.VIEW_DESCRIPTIONS[v] for v in cluster.VIEWS
+                              if any(v in (i.get("views") or {}) for i in result["sets"].values())},
         "outputs": {k: Path(v).name for k, v in outputs.items() if k != "summary"},
         "notes": ["cluster numbers are per view and per slide; 0 is the largest cluster",
                   "columns of the labels table: <set>_<view>_<method>_k<k>; empty outside the set",

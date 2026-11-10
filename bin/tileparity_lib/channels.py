@@ -11,6 +11,12 @@ names, and in ``rgb`` and ``rgb_he`` both extractors see exactly the same pixels
   per channel of it (``R_he``, ``G_he``, ``B_he``).
 * ``he``     - fastLBP only, optional: the amounts of H and of E as two single-channel
   images (stain-specific textures: nuclei; cytoplasm and stroma).
+* ``h``, ``e`` - fastLBP only, optional: the amount of H alone, or of E alone (one channel
+  each), to see which stain carries the texture. They read the same H and E images as
+  ``he``; a channel used by several sets is computed once.
+
+UNI2-h needs three channels (it was trained on RGB images); LBP works on one channel at a
+time, so it takes any number of them.
 
 How H and E are separated (colour deconvolution, Ruifrok & Johnston 2001):
 
@@ -56,8 +62,13 @@ from dataclasses import dataclass
 import numpy as np
 import pyvips
 
-CHANNEL_SETS = {"rgb": ("R", "G", "B"), "rgb_he": ("R_he", "G_he", "B_he"), "he": ("H", "E")}
-LBP_SETS = ("rgb", "rgb_he", "he")
+CHANNEL_SETS = {"rgb": ("R", "G", "B"), "rgb_he": ("R_he", "G_he", "B_he"), "he": ("H", "E"), "h": ("H",),
+                "e": ("E",)}
+LBP_SETS = ("rgb", "rgb_he", "he", "h", "e")
+# the feature view of each LBP input set (exported objects, 3-D UMAP, clustering)
+LBP_SET_VIEWS = {"rgb": "LBP_RGB", "rgb_he": "LBP_RGB_HE", "he": "LBP_HE", "h": "LBP_H", "e": "LBP_E"}
+# the LBP input sets that add bands to the channels image (H and E are always written)
+BAND_SETS = ("rgb", "rgb_he")
 UNI2H_INPUTS = ("rgb", "rgb_he")
 CHANNELS = ("H", "E", "R", "G", "B", "R_he", "G_he", "B_he")
 REMOVED = {"grey": "the grey channel set was removed in tileparity 0.3 (use rgb and rgb_he)"}
@@ -72,7 +83,7 @@ RUIFROK_E = (0.07, 0.99, 0.11)
 
 
 def parse_sets(text: str, allowed: tuple = LBP_SETS, allow_empty: bool = False) -> list[str]:
-    """Validated, de-duplicated input sets in their canonical order (rgb, rgb_he, he)."""
+    """Validated, de-duplicated input sets in their canonical order (rgb, rgb_he, he, h, e)."""
     sets = [s.strip().lower() for s in str(text or "").split(",") if s.strip() and s.strip().lower() != "none"]
     for s in sets:
         if s in REMOVED:
@@ -98,8 +109,9 @@ def band_order(lbp_sets: list[str], uni2h_inputs: list[str] = ()) -> list[str]:
 
 
 def lbp_channels(sets: list[str]) -> list[str]:
-    """Channels that LBP is computed on, in the canonical order of the sets."""
-    return [c for s in parse_sets(",".join(sets), LBP_SETS) for c in CHANNEL_SETS[s]]
+    """Channels that LBP is computed on, in the canonical order of the sets, each once
+    (``he``, ``h`` and ``e`` share H and E)."""
+    return list(dict.fromkeys(c for s in parse_sets(",".join(sets), LBP_SETS) for c in CHANNEL_SETS[s]))
 
 
 # ---- stain vectors ---------------------------------------------------------------------------

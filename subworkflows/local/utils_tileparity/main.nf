@@ -54,10 +54,10 @@ def validateParams() {
         error("--lbp_channels '${params.lbp_channels}': the grey channel set was removed in tileparity 0.3; " +
               "use rgb (R, G, B of the slide) and rgb_he (R, G, B of the slide rebuilt from H and E only)")
     }
-    if (!params.skip_lbp && (!sets || (sets - ['rgb', 'rgb_he', 'he']))) {
-        error("--lbp_channels '${params.lbp_channels}': use a comma-separated subset of the input sets rgb, rgb_he, he " +
+    if (!params.skip_lbp && (!sets || (sets - ['rgb', 'rgb_he', 'he', 'h', 'e']))) {
+        error("--lbp_channels '${params.lbp_channels}': use a comma-separated subset of the input sets rgb, rgb_he, he, h, e " +
               "('rgb' = R, G, B of the slide; 'rgb_he' = R, G, B of the slide rebuilt from H and E only; " +
-              "'he' = the H and E amounts)")
+              "'he' = the H and E amounts; 'h' = the H amount alone; 'e' = the E amount alone)")
     }
     def inputs = inputSets(params.uni2h_inputs)
     if (!params.skip_uni2h && (!inputs || (inputs - ['rgb', 'rgb_he']))) {
@@ -108,7 +108,8 @@ def validateParams() {
 
 def validateCluster() {
     listParam('cluster_views', params.cluster_views,
-              ['all', 'UNI2H_RGB', 'UNI2H_RGB_HE', 'LBP_RGB', 'LBP_RGB_HE', 'LBP_HE', 'INTENSITY_HE', 'EXPRESSION'])
+              ['all', 'UNI2H_RGB', 'UNI2H_RGB_HE', 'LBP_RGB', 'LBP_RGB_HE', 'LBP_HE', 'LBP_H', 'LBP_E', 'INTENSITY_HE',
+               'EXPRESSION'])
     listParam('cluster_sets', params.cluster_sets, ['keep', 'extended'])
     listParam('cluster_methods', params.cluster_methods, ['leiden', 'kmeans'])
     def ks = (params.cluster_k ?: '').toString().tokenize(',')*.trim().findAll { v -> v }

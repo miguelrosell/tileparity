@@ -13,7 +13,7 @@ UNI2-h and fastLBP expect different inputs: UNI2-h takes a 224 × 224 px image a
 
 | Aspect | UNI2-h (1a → 2a) | fastLBP (2b) | Same? |
 |---|---|---|---|
-| Source pixels | input sets `rgb` and `rgb_he` (Process 1b) | input sets `rgb` and `rgb_he` (+ optional `he`) | yes |
+| Source pixels | input sets `rgb` and `rgb_he` (Process 1b) | input sets `rgb` and `rgb_he` (+ optional `he`, `h`, `e`: the stain amounts, which UNI2-h cannot read) | yes, for `rgb` and `rgb_he` |
 | Pixel size | target µm/px | target µm/px | yes |
 | Tiles | tile table (x0, y0, 224 px) | tile table | yes |
 | Tiles with features | `extract == true` | `extract == true` | yes |
@@ -93,9 +93,13 @@ UNI2-h reads RGB images; LBP compares one number with another, so it reads one c
 |---|---|---|---|---|
 | `rgb` | the slide as it is | reads the image: `UNI2H_RGB` | one LBP per channel R, G, B: `LBP_RGB` | on for both |
 | `rgb_he` | the slide rebuilt from haematoxylin and eosin only | reads the image: `UNI2H_RGB_HE` | one LBP per channel R_he, G_he, B_he: `LBP_RGB_HE` | on for both |
-| `he` | the amounts of H and of E, two single-channel images | — (needs 3 channels) | `LBP_H`, `LBP_E` = `LBP_HE` | off |
+| `he` | the amounts of H and of E, two single-channel images | — (needs 3 channels) | one LBP on H and one on E, side by side: `LBP_HE` | off |
+| `h` | the amount of H alone (haematoxylin) | — | `LBP_H` | off |
+| `e` | the amount of E alone (eosin) | — | `LBP_E` | off |
 
 The sets are alternatives to compare, stored as separate blocks and never concatenated with each other. Comparing `rgb` with `rgb_he` in each extractor tells how much it relies on colour that is neither H nor E (scanner tint, pigment, pen): a batch effect that disappears in `rgb_he` came from that colour.
+
+**Why `he`, `h` and `e` (fastLBP only).** `rgb_he` lets both extractors read the same pixels, but its form is set by UNI2-h, which needs three channels. Each of R_he, G_he and B_he is computed from both amounts at once (its optical density is a mixture of H and E, weighted by the slide's stain colours), so `LBP_RGB_HE` describes three blends of nuclear and cytoplasm/stroma texture rather than each stain's own. LBP reads one channel at a time, so it can read the amounts themselves: `he` gives the LBP of H and of E side by side (`LBP_HE`), `h` and `e` each alone (`LBP_H`, `LBP_E`); the three share the same two LBP computations. Comparing them with `LBP_RGB_HE` in the clustering (agreement with expression at the same k) measures how much fastLBP loses by reading the images made for UNI2-h; `LBP_H` against `LBP_E` shows which stain's texture follows expression more closely. UNI2-h has no counterpart on these pixels, so they answer a question about fastLBP, not a comparison of the two extractors on identical input. They add two channels to fastLBP (H and E, a third more time with the default sets) and change neither the channels image nor UNI2-h, so a finished run can add them with `-resume`: Process 1b only receives the sets that add bands to its image (`rgb`, `rgb_he`), and its task, and UNI2-h after it, are reused.
 
 **How `rgb_he` is made** (colour deconvolution, Ruifrok & Johnston 2001):
 
@@ -114,7 +118,7 @@ Why not give UNI2-h the H and E amounts directly: its first layer takes exactly 
 
 Stain colours vary between laboratories, protocols and scanners. On three real H&E images, the slides' own vectors left 1–4 % of the optical density outside the plane (R, G, B moved by 1–3 levels on average); the standard vectors 5–22 % (3–23 levels), the largest on a Visium image with a grey tint, whose rebuilt version visibly changed colour. The estimated vectors were 7–20° (H) and 7–34° (E) away from the standard ones. `rgb_he` depends only on the plane, not on the two directions within it; the directions matter for the `he` channels and the intensity block. When H and E come out less than 15° apart (a slide with little eosin, for example), `channels.json` notes that their amounts are poorly separated.
 
-**`he` channels**: max(a, 0) mapped to 0–255 with a **fixed** range shared by all samples (H: 0–0.30, E: 0–0.15 in the OD units above; the fractions of pixels above the range are reported in `channels.json`). H and E separate nuclear texture from cytoplasm/stroma texture. They are always computed, because fastLBP's intensity block (below) is made from them.
+**H and E channels** (input sets `he`, `h`, `e`): max(a, 0) mapped to 0–255 with a **fixed** range shared by all samples (H: 0–0.30, E: 0–0.15 in the OD units above; the fractions of pixels above the range are reported in `channels.json`). H and E separate nuclear texture from cytoplasm/stroma texture. They are always computed, because fastLBP's intensity block (below) is made from them.
 
 ## LBP features (2b)
 
@@ -149,7 +153,7 @@ The number of summed units and the total counts per tile are stored (`counts_sum
 
 ## Exports (4)
 
-SpatialExperiment (primary, R/Bioconductor) and AnnData (Python) are built independently from the same intermediate files. Per sample: `assay(counts)` genes × tiles, `colData` = tile table (the extracted tiles, with `extract`, `keep` and `qc_fail`), `spatialCoords` = tile centre in full-resolution pixels, `reducedDims` = `UNI2H_RGB`, `UNI2H_RGB_HE`, `LBP_RGB`, `LBP_RGB_HE`, `LBP_HE`, `LBP_CENTER_*` (those computed) and `INTENSITY_HE`, `imgData` = thumbnail. A combined object per scale keeps the genes shared by all samples with expression. LBP histograms are stored as raw counts; divide by 50 176 for frequencies. Counts are integers except with `--visium_split fraction`.
+SpatialExperiment (primary, R/Bioconductor) and AnnData (Python) are built independently from the same intermediate files. Per sample: `assay(counts)` genes × tiles, `colData` = tile table (the extracted tiles, with `extract`, `keep` and `qc_fail`), `spatialCoords` = tile centre in full-resolution pixels, `reducedDims` = `UNI2H_RGB`, `UNI2H_RGB_HE`, `LBP_RGB`, `LBP_RGB_HE`, `LBP_HE`, `LBP_H`, `LBP_E`, `LBP_CENTER_*` (those computed: one LBP view per input set of `channel_sets` in `lbp.h5`) and `INTENSITY_HE`, `imgData` = thumbnail. A combined object per scale keeps the genes shared by all samples with expression. LBP histograms are stored as raw counts; divide by 50 176 for frequencies. Counts are integers except with `--visium_split fraction`.
 
 ## Lineage and figures
 
@@ -174,4 +178,4 @@ The question: do the feature views — UNI2-h and LBP on each input set, the H a
 * **Agreement.** The adjusted Rand index (ARI) looks at every pair of tiles: two partitions agree on a pair when both put the two tiles together, or both put them apart. The share of agreeing pairs is rescaled so that randomly assigned labels score about 0 and identical partitions 1. The normalised mutual information (NMI; arithmetic-mean normalisation) is a second measure in the table. ARI's correction for chance assumes labels scattered at random over the tiles, but cluster maps are made of patches, and patchy maps agree partly by chance: two unrelated maps of six patches each typically reach an ARI of about 0.2. The spatial null measures this chance level. One map is moved over the other on the tile grid with wrap-around (a torus translation, as in tests of species–habitat associations in ecology), by at least 20 % of the grid and keeping at least 30 % of the tiles over tiles, 100 times (`--cluster_null_shifts`): both maps keep their patchiness but lose their alignment. The table gives the null's 5th, 50th and 95th percentiles and `p_null` = (1 + number of moves with an ARI at least as high as observed) / (1 + number of moves).
 * **Limits.** The clustering ignores where the tiles are, so neighbouring tiles are not pushed into the same cluster (spatial-domain methods do that, and would also make the views look more alike than they are). One random seed (`--cluster_seed`). The null is an approximation: moving a map also moves its regions away from the tissue outline, and it needs tiles on a grid (it is not computed for spot tiles). Cluster numbers are per view and per slide; 0 is the largest cluster.
 * **Cost.** About a minute per slide and scale for a few thousand tiles, half of it compiling UMAP's functions; no GPU.
-* **Outputs.** The label of every tile in every clustering, the agreement table, a summary and three figures: heatmaps and curves of the agreement, the clusters of every view on the slide with matched colours, and contingency tables against the reference view (`EXPRESSION`, or `UNI2H_RGB` for slides without expression). The exports add the Leiden labels of the set `keep` to the tile table (`cluster_<view>_leiden_k<k>`).
+* **Outputs.** The label of every tile in every clustering, the agreement table, a summary (with what each view is, `view_descriptions`) and three figures, whose captions list the views shown and what each one is: heatmaps and curves of the agreement, the clusters of every view on the slide with matched colours, and contingency tables against the reference view (`EXPRESSION`, or `UNI2H_RGB` for slides without expression). The exports add the Leiden labels of the set `keep` to the tile table (`cluster_<view>_leiden_k<k>`).
