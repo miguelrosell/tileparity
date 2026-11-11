@@ -1,6 +1,7 @@
 // Optional (--cluster) - every feature view of one slide and scale clustered on its own
 // (Leiden and k-means at the same numbers of clusters), and how much the views agree
-// (adjusted Rand index, NMI, spatial null), with figures.
+// (adjusted Rand index, NMI, spatial null), with figures. With --redundancy, also how much
+// of each image view the others predict (redundancy*).
 process TILEPARITY_CLUSTER {
     tag "${meta.id}"
     label 'process_medium'
@@ -15,6 +16,7 @@ process TILEPARITY_CLUSTER {
     tuple val(meta), path("${prefix}.clusters.tsv.gz"), path("${prefix}.cluster.lineage.json"), emit: labels
     tuple val(meta), path("${prefix}.cluster_agreement.tsv"), path("${prefix}.cluster.json")     , emit: agreement
     tuple val(meta), path("${prefix}.cluster_*.png")                       , optional: true       , emit: figures
+    tuple val(meta), path("${prefix}.redundancy*")                         , optional: true       , emit: redundancy
     path "versions.yml"                                                                        , emit: versions
 
     script:

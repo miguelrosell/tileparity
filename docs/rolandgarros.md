@@ -289,6 +289,101 @@ What is new in `results_v0.4.1/`:
 
 The `*.lineage.json` of the reused steps (prepare, channels, uni2h, st) keep `"tileparity_version": "0.4.0"`, those of the steps run again say 0.4.1. This is correct: those files were made by 0.4.0, and 0.4.1 computes them in the same way. `pipeline_info/` has the report of this run, with the reused tasks marked as cached.
 
+## 12. Four samples: P2 and P5 added (tileparity 0.5.0 or later)
+
+Two more Visium HD colorectal cancer slides from the same study as P1 (Oliveira et al., *Nature Genetics* 2025; the 10x Genomics page of section 5): patients P2 and P5, same protocol, technology and processing as P1. With ZEN36 they make four samples, three of one technology. The run also switches on what 0.5.0 adds: the redundancy between the image views (`--redundancy`) and the comparison of three preparations of the LBP histograms (`--cluster_lbp_recipes`). It is a new run in a new folder, so nothing of the earlier runs changes.
+
+**1. Update the code and check the links** (each `curl` should print a line with `200`):
+
+```bash
+source $HOME/tileparity/env.sh
+git -C $TP/tileparity pull
+git -C $TP/tileparity log -1 --oneline          # "tileparity 0.5.0: ..." or later
+{ printf 'sample\tkind\turl\n'; grep -E 'P2_CRC|P5_CRC' $TP/tileparity/assets/cohort_a_10x_urls.tsv; } > $TP/data/p2_p5_urls.tsv
+cut -f3 $TP/data/p2_p5_urls.tsv | tail -n +2 | while read u; do curl -sI "$u" | head -1; done
+```
+
+If a link does not answer `200`, copy the right one from the 10x Genomics page (sample P2 or P5 CRC: the microscope image `.btf` and the binned outputs `.tar.gz`) into `$TP/data/p2_p5_urls.tsv`.
+
+**2. Download** (about 20 GB; as a job, so that it survives a lost connection):
+
+```bash
+sbatch --job-name=dl_p2p5 --time=04:00:00 --output=$TP/data/dl_p2p5_%j.log \
+    --wrap "bash $TP/tileparity/scripts/download_urls.sh $TP/data/p2_p5_urls.tsv $TP/data/raw"
+squeue -u $USER                                   # wait until it is gone
+ls $TP/data/raw/A_P2_CRC $TP/data/raw/A_P5_CRC    # each: the .btf image and binned_outputs/
+```
+
+**3. The samplesheet**: the two rows of the first run and two new ones.
+
+```bash
+mkdir -p $TP/runs/four_samples && cd $TP/runs/four_samples
+python - <<'END'
+import csv, glob, os
+tp = os.environ["TP"]
+rows = list(csv.DictReader(open(f"{tp}/runs/two_samples/samplesheet.csv")))
+for p in ("P2", "P5"):
+    rows.append({"sample": f"A_{p}_CRC", "image": glob.glob(f"{tp}/data/raw/A_{p}_CRC/*.btf")[0],
+                 "spatial": f"{tp}/data/raw/A_{p}_CRC/binned_outputs", "spatial_format": "spaceranger_hd",
+                 "patient": p, "condition": "CRC", "cohort": "A"})
+columns = list(dict.fromkeys(k for r in rows for k in r))
+with open("samplesheet.csv", "w", newline="") as fh:
+    out = csv.DictWriter(fh, fieldnames=columns, restval="")
+    out.writeheader()
+    out.writerows(rows)
+END
+cat samplesheet.csv                                # four rows: A_P1_CRC, ZEN36, A_P2_CRC, A_P5_CRC
+```
+
+**4. The job script and the run**: the options of the earlier runs, plus the clustering, the redundancy and the three LBP preparations.
+
+```bash
+cat > run.sbatch <<'END'
+#!/bin/bash
+#SBATCH --job-name=tp_four
+#SBATCH --cpus-per-task=32
+#SBATCH --mem=128G
+#SBATCH --gres=gpu:1
+#SBATCH --time=24:00:00
+#SBATCH --output=%x_%j.log
+source $HOME/tileparity/env.sh
+cd $SLURM_SUBMIT_DIR
+printf 'executor {\n    cpus = %s\n    memory = "%s MB"\n}\n' "$SLURM_CPUS_PER_TASK" "$SLURM_MEM_PER_NODE" > job.config
+nvidia-smi
+nextflow run $TP/tileparity -profile conda,gpu -c job.config \
+    --input samplesheet.csv --outdir results -w work \
+    --max_cpus 32 --max_memory '120.GB' --max_time '24.h' \
+    --uni2h_weights $TP/models/uni2h/pytorch_model.bin --uni2h_batch_size 64 \
+    --scales_mpp 0.5 --mask_compare --min_tissue_extract 0.3 --qc_umap \
+    --lbp_channels rgb,rgb_he,he,h,e \
+    --cluster --redundancy --cluster_lbp_recipes hellinger,scanpy,zscore \
+    -resume
+END
+sbatch run.sbatch                                  # prints the job number
+squeue -u $USER
+tail -f tp_four_<job number>.log                   # Ctrl+C stops watching, not the job
+```
+
+Every step runs for the four samples (a new folder reuses nothing), so it takes about as long as two first runs: roughly 1.5–2 hours. The software environments are those of 0.4.x, so none is created again. It ends with `[SUCCESS] completed=... failed=0` and `tileparity finished: results in results`.
+
+**5. What to look at**, per sample in `results/<sample>/mpp0.5000/cluster/`:
+
+1. `<id>.cluster_agreement_keep.png`, maps and contingency tables, as before, now for four slides.
+2. `<id>.redundancy_keep.png`: how much of each image view the others predict (rows predict columns), and, for UNI2-h and LBP on the same pixels, how much of each principal component. `<id>.redundancy.tsv` has the numbers.
+3. `<id>.redundancy_maps_keep.png`: where on the slide each of the two has what the other does not predict.
+4. `<id>.cluster_lbp_recipes_keep.png`: the three preparations of every LBP view against expression.
+
+**6. Package and send** (as in section 11):
+
+```bash
+cd $TP/runs/four_samples
+tar czf tp_v050.tgz --exclude='*.h5' --exclude='*.h5ad' --exclude='*.rds' --exclude='*.tif' \
+    results tp_four_<job number>.log run.sbatch samplesheet.csv
+ls -lh tp_v050.tgz
+```
+
+From a terminal on the laptop: `scp <user>@wimbledon.mls.uzh.ch:tileparity/runs/four_samples/tp_v050.tgz ~/`.
+
 ## Route B: containers (Apptainer or Singularity)
 
 If Apptainer or Singularity becomes available on the login node and the compute nodes, Nextflow can run on the login node and send every task to SLURM as its own job, each in the pipeline's container image (no environments to create):
@@ -301,4 +396,4 @@ nextflow run $TP/tileparity -profile uzh_rolandgarros,apptainer \
     --scales_mpp 0.5 --mask_compare --min_tissue_extract 0.3 --qc_umap
 ```
 
-Run it in `tmux` on the login node (Nextflow must keep running while the jobs run). The jobs go to the default partition (`main`) and the UNI2-h job asks for `--gres=gpu:1`; `--slurm_queue`, `--slurm_gpu_queue` and `--slurm_gpu_options` change that. `conf/uzh_rolandgarros.config` sets the SLURM executor, the resource ceilings (64 CPUs, 400 GB, 72 h per task) and the GPU request; the images (`ghcr.io/miguelrosell/tileparity-{python,uni2h,r}:0.4.1`) are public and pulled once into `~/.cache/tileparity/apptainer`. The same profile also works with conda (`-profile uzh_rolandgarros,conda`) when the login node has conda and internet access.
+Run it in `tmux` on the login node (Nextflow must keep running while the jobs run). The jobs go to the default partition (`main`) and the UNI2-h job asks for `--gres=gpu:1`; `--slurm_queue`, `--slurm_gpu_queue` and `--slurm_gpu_options` change that. `conf/uzh_rolandgarros.config` sets the SLURM executor, the resource ceilings (64 CPUs, 400 GB, 72 h per task) and the GPU request; the images (`ghcr.io/miguelrosell/tileparity-{python,uni2h,r}:0.5.0`) are public and pulled once into `~/.cache/tileparity/apptainer`. The same profile also works with conda (`-profile uzh_rolandgarros,conda`) when the login node has conda and internet access.

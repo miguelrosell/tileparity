@@ -56,6 +56,19 @@
 
 The caption of every clustering figure ends with the list of the views it shows and what each one is (`Views: UNI2H_RGB = UNI2-h embedding of the slide (1536 values per tile); …`), so a figure can be read without this page.
 
+With `--cluster_lbp_recipes hellinger,scanpy,zscore` (a diagnostic), every LBP view is also prepared like expression and like UNI2-h and clustered as views `<view>.scanpy` and `<view>.zscore` (e.g. `LBP_RGB.scanpy`): their labels are in `clusters.tsv.gz` (`keep_LBP_RGB.scanpy_leiden_k8`, after the default views) and their agreement with every other view in `cluster_agreement.tsv`; `cluster.json` lists them per set in `recipe_views_clustered` and describes the recipes in `lbp_recipes`. The heatmaps, maps and contingency tables keep to the default views, and one more figure compares the preparations:
+
+* `<id>.cluster_lbp_recipes_<set>.png`: for every LBP view, its ARI with the reference view by k, one line per preparation (`hellinger`, the default; `scanpy`; `zscore`), Leiden and k-means.
+
+With `--redundancy` (set `keep`; method in [design.md](design.md#optional-redundancy-between-views---redundancy)):
+
+* `<id>.redundancy.tsv`: one row per ordered pair of views: `set`, `predictor`, `target`, `n_tiles`, `n_folds`, `block_um`, `n_pcs_predictor`, `n_pcs_target`, `target_pc_variance` (the share of the target's variance its principal components keep), `r2` (the share of the target's component variance that the predictor predicts, out of sample), `r2_pc1` (of its first component), `r2_pcs1_5` (of its first five, weighted by variance) and `alpha_median` (the ridge penalty).
+* `<id>.redundancy_pcs.tsv.gz`: the R² of every principal component of every target (`pc`, its `variance_share`, `r2`).
+* `<id>.redundancy_tiles.tsv.gz`: per tile, its cross-validation `fold` and, for UNI2-h and LBP on the same pixels both ways, `unexplained_<target>_from_<predictor>`: the part of the target that the predictor does not predict, relative to the target's average variation (mean over the tiles = 1 − R²).
+* `<id>.redundancy_keep.png`: the matrix of R² (rows predict columns) and the R² of each component for UNI2-h and LBP on the same pixels.
+* `<id>.redundancy_maps_keep.png`: the H&E thumbnail and the per-tile unexplained part on the slide.
+* `<id>.cluster.json`: `redundancy` records the views, the folds and their sizes, and the block size.
+
 ## `export/mpp<scale>/`
 
 * `spe/<id>.rds` and `spe/combined_mpp<scale>.rds` — SpatialExperiment: `assay(spe, "counts")`, `colData(spe)` (tile table of the extracted tiles; with `--cluster` also the Leiden labels of the set `keep`, `cluster_<view>_leiden_k<k>`, text, `NA` outside the set), `spatialCoords(spe)` (tile centres, full-resolution px), `reducedDims(spe)` (`UNI2H_RGB`, `UNI2H_RGB_HE`, `LBP_RGB`, `LBP_RGB_HE`, `LBP_HE`, `LBP_H`, `LBP_E`, `LBP_CENTER_*`, `INTENSITY_HE`, those computed; the LBP views are in the table above), `imgData(spe)` (thumbnail), `metadata(spe)$tileparity` (provenance — including `channels`, the content of `channels.json` with the stain vectors — and `lineage`, JSON text).

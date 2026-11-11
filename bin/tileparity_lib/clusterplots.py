@@ -99,17 +99,21 @@ def heatmap(values: np.ndarray, labels: list[str], title: str, notes=None, diago
     return img
 
 
-def colour_bar(width: int = 260) -> Image.Image:
+def colour_bar(width: int = 260, label: str = "ARI", top: float = 1.0) -> Image.Image:
+    """The blue scale from 0 to ``top`` (values above ``top`` take the darkest colour)."""
     f = figures.font(11)
-    img = Image.new("RGB", (width + 120, 34), BG)
+    probe = ImageDraw.Draw(Image.new("RGB", (1, 1)))
+    x0 = max(60, int(text_width(probe, plain(label), f)) + 18)
+    img = Image.new("RGB", (width + x0 + 60, 34), BG)
     draw = ImageDraw.Draw(img)
     for x in range(width):
-        draw.line([(60 + x, 4), (60 + x, 16)], fill=scale_colour(x / (width - 1)))
-    draw.rectangle([60, 4, 60 + width - 1, 16], outline=MUTED)
-    draw.text((8, 3), "ARI", font=f, fill=INK)
+        draw.line([(x0 + x, 4), (x0 + x, 16)], fill=scale_colour(x / (width - 1)))
+    draw.rectangle([x0, 4, x0 + width - 1, 16], outline=MUTED)
+    draw.text((8, 3), plain(label), font=f, fill=INK)
     for v in (0, 0.25, 0.5, 0.75, 1):
-        x = 60 + v * (width - 1)
-        draw.text((x - 8, 19), f"{v:g}", font=f, fill=MUTED)
+        x = x0 + v * (width - 1)
+        t = f"{v * top:g}" + ("+" if v == 1 and top != 1 else "")
+        draw.text((x - 8, 19), t, font=f, fill=MUTED)
     return img
 
 
@@ -123,7 +127,7 @@ def agreement_figure(table: pd.DataFrame, info: dict, set_name: str, methods: li
     t = table[table["set"] == set_name]
     heat, charts = [], []
     for m in methods:
-        tm = t[(t["method"] == m) & (t["k"] == k_ref)]
+        tm = t[(t["method"] == m) & (t["k"] == k_ref) & t["view_a"].isin(views) & t["view_b"].isin(views)]
         M = np.full((len(views), len(views)), np.nan)
         notes = [["" for _ in views] for _ in views]
         for r in tm.itertuples(index=False):
@@ -133,7 +137,8 @@ def agreement_figure(table: pd.DataFrame, info: dict, set_name: str, methods: li
                 notes[i][j] = notes[j][i] = f"null {r.null_ari_p95:.2f}"
         diag = None
         if len(methods) == 2:
-            d = t[(t["method"] == cluster.METHOD_PAIR) & (t["k"] == k_ref)].set_index("view_a")["ari"]
+            d = t[(t["method"] == cluster.METHOD_PAIR) & (t["k"] == k_ref) & t["view_a"].isin(views)]
+            d = d.set_index("view_a")["ari"]
             diag = [float(d.get(v, np.nan)) for v in views]
         name = "Leiden" if m == "leiden" else "k-means"
         heat.append(heatmap(M, views, f"{name}, k = {k_ref}: ARI between views", notes, diag))
@@ -309,3 +314,108 @@ def contingency_figure(result: dict, set_name: str, caption: dict, prefix: str) 
     name = "Leiden" if method == "leiden" else "k-means"
     title = f"Clusters of every view against {ref} ({name}, k = {k}) - {prefix}, set '{set_name}'"
     return figures.with_caption(figures.stack(rows), title=title, **caption)
+
+
+# ---- the LBP recipes (--cluster_lbp_recipes) ------------------------------------------------------------------
+RECIPE_COLOURS = {"hellinger": (0, 114, 178), "scanpy": (230, 159, 0), "zscore": (0, 158, 115)}
+
+
+def recipes_figure(table: pd.DataFrame, info: dict, set_name: str, methods: list[str], caption: dict,
+                   prefix: str) -> Image.Image | None:
+    """For every LBP view: ARI with the reference view by k, one line per preparation of
+    the LBP histograms; one row of panels per clustering method."""
+    alternatives = info.get("recipe_views_clustered") or []
+    ref = info["reference_view"]
+    bases = [v for v in info["views_clustered"] if v.startswith("LBP")
+             and any(cluster.split_variant(a)[0] == v for a in alternatives)]
+    if not bases or ref is None:
+        return None
+    t = table[table["set"] == set_name]
+    order = list(info["views_clustered"]) + list(alternatives)
+    recipes = [r for r in cluster.LBP_RECIPES if r == "hellinger" or any(a.endswith("." + r) for a in alternatives)]
+    cells, labels = [], []
+    for m in methods:
+        name = "Leiden" if m == "leiden" else "k-means"
+        for base in bases:
+            series = []
+            for r in recipes:
+                v = cluster.variant(base, r)
+                if v not in order:
+                    continue
+                a, b = sorted((v, ref), key=order.index)
+                rows = t[(t["method"] == m) & (t["view_a"] == a) & (t["view_b"] == b)].sort_values("k")
+                rows = rows[(rows["k_a"] == rows["k"]) & (rows["k_b"] == rows["k"])]
+                series.append({"name": r, "x": rows["k"].to_numpy(float), "y": rows["ari"].to_numpy(float),
+                               "colour": RECIPE_COLOURS[r]})
+            if not any(len(s["x"]) for s in series):
+                continue
+            lo = min([0.0] + [float(np.nanmin(s["y"])) for s in series if len(s["x"])])
+            cells.append(figures.line_chart(series, "k (number of clusters)", f"ARI with {ref}", size=(380, 280),
+                                            y_range=(0.0 if lo >= -0.05 else -0.25, 1.0), x_ticks=info["k"]))
+            labels.append(f"{base} - {name}")
+    if not cells:
+        return None
+    grid = figures.grid(cells, labels, ncols=len(bases), cell_width=380)
+    items = [(RECIPE_COLOURS[r], f"{r}: {cluster.RECIPE_SHORT[r]}") for r in recipes]
+    body = figures.stack([grid, figures.legend(items, width=grid.width)])
+    return figures.with_caption(body, title=(f"Three preparations of the LBP histograms - {prefix}, set '{set_name}' "
+                                             f"({info['n_tiles']} tiles)"), min_width=1100, **caption)
+
+
+# ---- redundancy between views (--redundancy) -------------------------------------------------------------------
+def redundancy_figure(red: dict, caption: dict, prefix: str, set_name: str) -> Image.Image | None:
+    """Left: R^2 of every view (columns) predicted from every other view (rows). Right: R^2
+    of each principal component of the target, for the pairs on identical pixels."""
+    table, pcs, info = red.get("table"), red.get("pcs"), red["info"]
+    if table is None or table.empty:
+        return None
+    views = info["views"]
+    M = np.full((len(views), len(views)), np.nan)
+    for r in table.itertuples(index=False):
+        M[views.index(r.predictor), views.index(r.target)] = r.r2
+    heat = heatmap(M, views, "R2 of the column view predicted from the row view", cell=58)
+    series = []
+    for a, b in info.get("map_pairs", []):
+        rows = pcs[(pcs["predictor"] == a) & (pcs["target"] == b)].sort_values("pc")
+        # out-of-sample R2 has no lower bound; values below -0.25 are drawn at -0.25
+        series.append({"name": f"{b} from {a}", "x": rows["pc"].to_numpy(float),
+                       "y": np.maximum(rows["r2"].to_numpy(float), -0.25),
+                       "colour": VIEW_COLOURS.get(b, figures.SERIES[len(series) % len(figures.SERIES)])})
+    parts = [heat]
+    if series:
+        n = int(max(s["x"].max() for s in series if len(s["x"])))
+        ticks = [t for t in (1, 5, 10, 20, 30, 40, 50, 75, 100) if t <= n]
+        chart = figures.line_chart(series, "principal component of the predicted view", "R2", size=(560, 360),
+                                   y_range=(-0.25, 1.0), x_ticks=ticks)
+        legend = figures.legend([(s["colour"], s["name"]) for s in series], width=560)
+        parts.append(figures.stack([figures.title_strip(560, "R2 of each component, UNI2-h and LBP on the same pixels",
+                                                        14), chart, legend]))
+    body = figures.stack([_side_by_side(parts), colour_bar(label="R2")])
+    return figures.with_caption(body, title=(f"How much of each view another view predicts - {prefix}, set "
+                                             f"'{set_name}' ({info['n_tiles']} tiles)"), min_width=1100, **caption)
+
+
+def redundancy_maps_figure(sample: dict, tiles: pd.DataFrame, red: dict, caption: dict, prefix: str,
+                           cell_width: int = 330, top: float = 2.0) -> Image.Image | None:
+    """The H&E thumbnail and, for every drawn pair, the share of the target view that the
+    predictor does not predict, per tile (blue scale from 0 to ``top`` times the average)."""
+    per_tile = red.get("per_tile") or {}
+    if not per_tile:
+        return None
+    cells, texts = [], []
+    thumb = sample.get("thumbnail")
+    if thumb is not None:
+        base, _, _, ox, oy = _thumbnail_frame(sample, tiles)
+        crop = Image.fromarray(np.asarray(thumb)[oy:oy + base.height, ox:ox + base.width, :3])
+        h = max(1, int(round(crop.height * cell_width / max(crop.width, 1))))
+        cells.append(crop.resize((cell_width, h), Image.LANCZOS))
+        texts.append("H&E (thumbnail)")
+    for (a, b), u in per_tile.items():
+        colours = [scale_colour(v / top) if np.isfinite(v) else (255, 255, 255) for v in u]
+        cells.append(cluster_map(sample, tiles, colours, cell_width))
+        r2 = 1 - float(np.nanmean(u))
+        texts.append(f"{b} not predicted from {a} (R2 {r2:.2f})")
+    grid = figures.grid(cells, texts, ncols=min(5, len(cells)), cell_width=cell_width)
+    body = figures.stack([grid, colour_bar(label="unexplained", top=top)])
+    return figures.with_caption(body, title=f"Where each view has what the other one does not predict - {prefix}",
+                                min_width=1100, **caption)

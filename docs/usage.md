@@ -40,21 +40,32 @@ nextflow run miguelrosell/tileparity -r main -profile laptop,docker,gpu \
     --uni2h_weights ~/models/uni2h/pytorch_model.bin
 ```
 
-Useful options:
+Useful options, in the three levels of `nextflow.config`.
+
+**Core** (the standard run):
 
 * `--scales_mpp 0.5` — main scale only (faster).
 * `-resume` — continue after an interruption; finished tasks are reused.
 * `--skip_uni2h` / `--skip_lbp` — run one branch only.
-* `--mask_compare` — compare the tissue mask with the other methods and finer resolutions (`prepare/<id>.mask_compare.png`).
 * `--min_tissue_extract 0.3` — compute features from 30 % tissue on (`keep` still uses `--min_tissue`), to compare thresholds later without rerunning.
-* `--lbp_channels rgb,rgb_he,he,h,e` — add LBP on the stain amounts to the default input sets: H and E side by side (`he`), H alone (`h`) and E alone (`e`); the LBP of H and of E is computed once for the three. They change neither the input images nor UNI2-h, so adding them to a finished run with `-resume` reruns only fastLBP and the steps after it (clustering, exports, QC page); [rolandgarros.md](rolandgarros.md#11-lbp-on-the-stain-amounts-he-h-e-tileparity-041-or-later) shows how. `--lbp_center` — add the central-pixel LBP blocks.
+* `--lbp_channels rgb,rgb_he,he,h,e` — add LBP on the stain amounts to the default input sets: H and E side by side (`he`), H alone (`h`) and E alone (`e`); the LBP of H and of E is computed once for the three. They change neither the input images nor UNI2-h, so adding them to a finished run with `-resume` reruns only fastLBP and the steps after it (clustering, exports, QC page); [rolandgarros.md](rolandgarros.md#11-lbp-on-the-stain-amounts-he-h-e-tileparity-041-or-later) shows how.
 * `--uni2h_inputs rgb` — UNI2-h on the slide only, not on its H&E-only version (half the GPU time).
 * `--stain_vectors standard` — the same published H and E colours for every slide instead of each slide's own.
-* `--qc_umap` — write an interactive 3-D UMAP of every feature view per scale (`qc/`).
-* `--cluster` — cluster every feature view of every slide and scale on its own and measure how much the views agree (`<sample>/mpp<scale>/cluster/`). Options: `--cluster_k` (numbers of clusters, default `2,3,4,6,8,10,12,15`), `--cluster_k_ref` (the k of the maps and heatmaps, 8), `--cluster_sets` (`keep,extended`; add `--min_tissue_extract 0.3` so that `extended` includes tiles with 30–50 % tissue), `--cluster_views` (default `all` computed views), `--cluster_methods` (`leiden,kmeans`), `--cluster_min_counts` (counts floor of `extended`, 0.1 of the median), `--cluster_n_pcs` (50), `--cluster_n_neighbors` (15), `--cluster_n_hvg` (2000), `--cluster_null_shifts` (100), `--cluster_seed` (0). The method is explained in [design.md](design.md#optional-clustering-of-every-view-per-slide---cluster).
 * `--visium_tiling spot` — spot-centred tiles for every standard Visium / HEST sample; `--visium_split fraction` — split spots by expected value instead of multinomially.
 * `--publish_images` — also keep the resampled and channels images (large).
 * `-profile debug` — keep work directories and print host names.
+
+**Optional analyses** (off by default):
+
+* `--qc_umap` — write an interactive 3-D UMAP of every feature view per scale (`qc/`).
+* `--cluster` — cluster every feature view of every slide and scale on its own and measure how much the views agree (`<sample>/mpp<scale>/cluster/`). Options: `--cluster_k` (numbers of clusters, default `2,3,4,6,8,10,12,15`), `--cluster_k_ref` (the k of the maps and heatmaps, 8), `--cluster_sets` (`keep,extended`; add `--min_tissue_extract 0.3` so that `extended` includes tiles with 30–50 % tissue), `--cluster_views` (default `all` computed views), `--cluster_methods` (`leiden,kmeans`), `--cluster_min_counts` (counts floor of `extended`, 0.1 of the median), `--cluster_n_pcs` (50), `--cluster_n_neighbors` (15), `--cluster_n_hvg` (2000), `--cluster_null_shifts` (100), `--cluster_seed` (0). The method is explained in [design.md](design.md#optional-clustering-of-every-view-per-slide---cluster).
+* `--redundancy` (with `--cluster`) — how much of each image view the others predict, from the same principal components as the clustering, in a spatial cross-validation (`cluster/<id>.redundancy*`). Options: `--redundancy_views` (`images`: every clustered view except EXPRESSION, or a list), `--redundancy_folds` (5), `--redundancy_block_um` (1000: side of the blocks of tissue that go to one fold). Method: [design.md](design.md#optional-redundancy-between-views---redundancy).
+
+**Diagnostics** (off by default; why each exists: [decisions.md](decisions.md)):
+
+* `--mask_compare` — compare the tissue mask with the other methods and finer resolutions (`prepare/<id>.mask_compare.png`).
+* `--lbp_center` — add the central-pixel LBP blocks.
+* `--cluster_lbp_recipes hellinger,scanpy,zscore` (with `--cluster`) — also prepare every LBP view like expression (`scanpy`: counts per 10 000, log1p, the `--cluster_lbp_hvf` share of most variable bins, 0.3, z-scores) and like UNI2-h (`zscore`), cluster them as views `<view>.scanpy` and `<view>.zscore`, and compare the three preparations (`cluster/<id>.cluster_lbp_recipes_keep.png`).
 
 The first real run on the UZH server is described step by step in [rolandgarros.md](rolandgarros.md).
 

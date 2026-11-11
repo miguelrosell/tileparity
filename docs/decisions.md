@@ -1,0 +1,21 @@
+# Design decisions and the diagnostics behind them
+
+tileparity's defaults are choices. Most of them were taken after comparing alternatives, and the options that made the comparison possible stay in the pipeline, off by default (the **diagnostics** level of `nextflow.config`), so that a decision can be checked again on new data. This page lists them: the decision, the alternatives, how to re-check it, and what the evidence was. The reasons in full are in [design.md](design.md).
+
+| # | Decision (default) | Alternatives kept | Re-check with | Evidence so far |
+|---|---|---|---|---|
+| 1 | Tiles of 224 px at 0.5 µm/px (112 µm) as the main scale | other scales (`--scales_mpp`, default also 0.2857 and 1.0 µm/px) | `--scales_mpp` | UNI2-h takes 224 px tiles and was trained around 0.5 µm/px; LBP and expression use the same tiles so that every view describes the same tissue. Smaller tiles for LBP alone are planned (README, roadmap) |
+| 2 | Tissue mask from saturation at 4 µm/px | `grey`, `od`; finer resolutions; an external mask per sample | `--mask_compare` (`prepare/<id>.mask_compare.png`: Dice overlap, tiles gained and lost, agreement with Space Ranger's tissue call) | compared on the first two real samples (0.3.0 run) and kept |
+| 3 | A tile is kept with at least 50 % tissue (`keep`) | features from a lower threshold (`--min_tissue_extract`), the set `extended` in the clustering | `prepare/<id>.tissue_thresholds.png` (always written), `--min_tissue_extract 0.3 --cluster_sets keep,extended` | the 0.4.0 run computed features from 30 % on and clustered both sets |
+| 4 | Standard Visium on the tile grid, each spot's molecules split between tiles by area (multinomial) | spot-centred tiles (`--visium_tiling spot`), expected values (`--visium_split fraction`) | the same options | a tile's image covers the area its expression comes from; no tile overlaps another |
+| 5 | Both extractors read the same images: the slide (`rgb`) and the slide rebuilt from H and E only (`rgb_he`) | LBP on the stain amounts (`he`, `h`, `e`); UNI2-h on one set only (`--uni2h_inputs rgb`) | `--lbp_channels rgb,rgb_he,he,h,e` | 0.4.1 run: LBP on the stain amounts agreed with expression no more than LBP on `rgb_he` in P1 (ARI 0.27 against 0.25 at k = 8); a small, consistent gain in ZEN36, whose H and E colours are poorly separated (16.6°) |
+| 6 | H and E colours estimated on each slide (Macenko) | the published colours (`--stain_vectors standard`) | `channels/<id>.rgb_he_qc.png` and `.tsv` (optical density removed per tile) | on real H&E the slides' own colours left 1–4 % of the optical density outside the H–E plane, the published ones 5–22 % |
+| 7 | LBP of each tile computed with its real neighbourhood (codes as in fastLBP's whole-image run) | — | `scripts/border_effect.py` | cutting tiles without context would change 3–5 % of the codes at the largest radius (1–5 % over all radii) |
+| 8 | LBP histograms prepared as proportions, square root (Hellinger) and the same weight for every channel and radius | like expression (`scanpy`: log1p, most variable bins, z-scores) and like UNI2-h (`zscore`) | `--cluster --cluster_lbp_recipes hellinger,scanpy,zscore` (`cluster/<id>.cluster_lbp_recipes_keep.png`) | questioned in November 2026 as arbitrary; the comparison is first run on four samples with 0.5.0 |
+| 9 | Central-pixel LBP not used | `LBP_CENTER_*` blocks | `--lbp_center` | available for analyses that need the pattern at a tile's centre; not used by any analysis so far |
+| 10 | Blurred tiles flagged, not removed | `--drop_blurred` | `blur_flag` in the tile table and the overlay | — |
+| 11 | Clusterings compared at the same number of clusters (Leiden's resolution searched for each k), with k-means as a check and a spatial null | — | `--cluster_k`, `--cluster_methods`, `--cluster_null_shifts` | the ARI depends on the number of clusters; patchy maps agree partly by chance (about 0.1–0.2) |
+
+## How to add a decision
+
+When an option is added to compare alternatives, put it in the diagnostics section of `nextflow.config` (off by default), add a row here with what it re-checks, and record the outcome in the last column once real data have been run. If the outcome changes a default, say so in CHANGELOG.md.

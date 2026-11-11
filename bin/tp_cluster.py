@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Optional (--cluster): every feature view of one slide clustered on its own (Leiden and
 k-means at the same numbers of clusters), and how much the views agree (ARI, NMI and a
-spatial null). See tileparity_lib/cluster.py for the method."""
+spatial null). See tileparity_lib/cluster.py for the method. With --lbp-recipes, the LBP
+views are also prepared in two other ways and compared; with --redundancy, how much of each
+image view the others predict (tileparity_lib/redundancy.py)."""
 
 import argparse
 import gzip
@@ -12,7 +14,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from tileparity_lib import cluster, clusterplots, export, lineage  # noqa: E402
+from tileparity_lib import cluster, clusterplots, export, lineage, redundancy  # noqa: E402
 
 log = logging.getLogger("tp_cluster")
 
@@ -114,7 +116,64 @@ def captions(info: dict, set_name: str, args, ref: str, source: str, mask_mpp) -
                     "counts). Cluster numbers are per view and per slide."),
         "source": source,
     }
-    return {"agreement": agreement, "maps": maps, "contingency": contingency}
+    out = {"agreement": agreement, "maps": maps, "contingency": contingency}
+    if info.get("recipe_views_clustered"):
+        recipes = info.get("lbp_recipes", {})
+        listed = "; ".join(f"{r} = {d}" + (f" ({args.lbp_hvf:.0%} of the bins kept)" if r == "scanpy" else "")
+                           for r, d in recipes.items())
+        out["recipes"] = {
+            "what": (f"For every LBP view of the set '{set_name}' ({n} tiles), the ARI of its clusters with {ref} for "
+                     f"k = {ks}, with the LBP histograms prepared in {len(recipes)} ways before the same PCA and "
+                     f"clustering ({methods}; one row of panels per method). Preparations: {listed}. "
+                     f"{views_text(info)}"),
+            "how": ("Lines that lie together: what LBP shows does not depend on how its histograms are prepared. A "
+                    "preparation whose line lies clearly above the others at most k and with both methods keeps more "
+                    f"of what {ref} sees."),
+            "caveats": ("Choosing a preparation by its agreement with expression on these slides tunes LBP to the "
+                        "reference: confirm on other slides before adopting one. Each alternative has choices of its "
+                        "own (log1p, the share of bins kept, the clip at 10). Every pair, k and null are in "
+                        "cluster_agreement.tsv (views named <view>.<recipe>)."),
+            "source": source,
+        }
+    return out
+
+
+def redundancy_captions(red: dict, args, source: str) -> dict:
+    info = red["info"]
+    block = f"{info['block']:g} {'um' if info['block_unit'] == 'um' else 'tiles'}"
+    views = "Views: " + "; ".join(f"{v} = {cluster.view_description(v)}" for v in info["views"]) + "."
+    matrix = {
+        "what": (f"For the {info['n_tiles']} tiles of the set 'keep', how much of each view (columns) another view "
+                 f"(rows) predicts: the predicted view's principal components (those of the clustering, at most "
+                 f"{args.n_pcs}) are predicted from the other view's with ridge regression, every tile by a model "
+                 f"fitted on other parts of the slide (spatial cross-validation: {info['n_folds']} folds of square "
+                 f"blocks of {block}). R2 = the share of the predicted view's variance that the other view predicts. "
+                 "Right: R2 of each component of the predicted view, for UNI2-h and LBP on the same pixels (values "
+                 "below -0.25, components that the other view predicts worse than their mean, are drawn at -0.25). "
+                 + views),
+        "how": ("Rows are 'from', columns 'predicted'. High R2 both ways: the two views carry largely the same "
+                "information. Asymmetric values: the view that predicts the other well but is predicted badly holds "
+                "information the other lacks (its own part is 1 - R2). In the curves, high R2 on the first "
+                "components and low on later ones: the views share their main structure and differ in finer detail."),
+        "caveats": ("R2 refers to the variance the components keep (target_pc_variance in redundancy.tsv) and to "
+                    "linear prediction: a view may be predictable in a non-linear way. The spatial blocks limit, but "
+                    "do not remove, the help of spatial autocorrelation. What one view has and the other lacks is "
+                    "not necessarily biology (noise, staining, focus): the maps show where it is. Every pair: "
+                    "redundancy.tsv; every component: redundancy_pcs.tsv.gz."),
+        "source": source,
+    }
+    maps = {
+        "what": ("For UNI2-h and LBP on the same pixels, both ways: the part of the predicted view that the other view "
+                 "does not predict, per tile (squared prediction error relative to the average variation of the "
+                 "predicted view, so that its mean over the tiles is 1 - R2), over the faded thumbnail. " + views),
+        "how": ("Dark tiles hold what one view has and the other cannot predict. Coherent dark regions: tissue that "
+                "only one view describes. Scattered dark tiles or dark edges: likely artefacts (blur, folds, stain, "
+                "tissue borders), worth checking on the H&E."),
+        "caveats": ("Out-of-sample predictions with spatial blocks; values above 2 (twice the average) take the "
+                    "darkest colour. Per-tile values: redundancy_tiles.tsv.gz."),
+        "source": source,
+    }
+    return {"matrix": matrix, "maps": maps}
 
 
 def main(argv=None):
@@ -133,6 +192,16 @@ def main(argv=None):
                     help="set 'extended': minimum molecules per spatial unit, as a fraction of the keep tiles' median")
     ap.add_argument("--null-shifts", type=int, default=100, help="moves of the spatial null (0: no null)")
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--lbp-recipes", default="hellinger",
+                    help=f"preparations of the LBP views, comma list of {', '.join(cluster.LBP_RECIPES)}; hellinger is "
+                         "always used for the views themselves, the others give views <view>.<recipe>")
+    ap.add_argument("--lbp-hvf", type=float, default=0.3, help="recipe scanpy: share of the LBP bins kept")
+    ap.add_argument("--redundancy", action="store_true", help="how much of each image view the others predict")
+    ap.add_argument("--redundancy-views", default="images",
+                    help="views of the redundancy analysis: images (every clustered view except EXPRESSION), or a "
+                         "comma list of views")
+    ap.add_argument("--redundancy-folds", type=int, default=5)
+    ap.add_argument("--redundancy-block-um", type=float, default=1000.0, help="side of the spatial blocks (um)")
     lineage.add_cli(ap)
     args = ap.parse_args(argv)
     process = args.process or "TILEPARITY_CLUSTER"
@@ -140,6 +209,13 @@ def main(argv=None):
     args.sets = names(args.sets, cluster.SETS, "sets")
     args.methods = names(args.methods, cluster.METHODS, "methods")
     args.k = integers(args.k)
+    args.lbp_recipes = names(args.lbp_recipes, cluster.LBP_RECIPES, "lbp-recipes")
+    if not 0 < args.lbp_hvf <= 1:
+        raise SystemExit(f"--lbp-hvf: a share between 0 and 1, not {args.lbp_hvf}")
+    if args.redundancy_views != "images":
+        args.redundancy_views = names(args.redundancy_views, cluster.VIEWS, "redundancy-views")
+    if args.redundancy_folds < 2 or args.redundancy_block_um <= 0:
+        raise SystemExit("--redundancy-folds must be at least 2 and --redundancy-block-um positive")
 
     prefixes = export.discover(args.input_dir)
     if args.prefix is None:
@@ -152,7 +228,8 @@ def main(argv=None):
     sample = export.load_sample(args.input_dir, prefix)
     result = cluster.run(sample, views=args.views, ks=args.k, k_ref=args.k_ref, methods=args.methods, sets=args.sets,
                          n_pcs=args.n_pcs, n_neighbors=args.n_neighbors, n_hvg=args.n_hvg,
-                         min_counts_ratio=args.min_counts_ratio, null_shifts=args.null_shifts, seed=args.seed, log=log)
+                         min_counts_ratio=args.min_counts_ratio, null_shifts=args.null_shifts, seed=args.seed,
+                         lbp_recipes=args.lbp_recipes, lbp_hvf=args.lbp_hvf, log=log)
 
     outputs = {"labels": f"{prefix}.clusters.tsv.gz", "agreement": f"{prefix}.cluster_agreement.tsv",
                "summary": f"{prefix}.cluster.json"}
@@ -178,11 +255,18 @@ def main(argv=None):
         }
         if s == "keep":
             made["contingency_keep"] = clusterplots.contingency_figure(result, s, text["contingency"], prefix)
+        if "recipes" in text:
+            made[f"lbp_recipes_{s}"] = clusterplots.recipes_figure(result["agreement"], info, s, args.methods,
+                                                                   text["recipes"], prefix)
         for name, img in made.items():
             if img is not None:
                 path = f"{prefix}.cluster_{name}.png"
                 img.save(path)
                 outputs[f"figure_{name}"] = path
+
+    red_info = None
+    if args.redundancy:
+        red_info = run_redundancy(sample, result, args, prefix, parents, process, outputs)
 
     summary = {
         "prefix": prefix,
@@ -190,13 +274,16 @@ def main(argv=None):
         "scale_mpp": prep.get("mpp_target"),
         "parameters": {k: v for k, v in vars(args).items() if k not in ("input_dir", "lineage_parent", "process")},
         "sets": result["sets"],
-        "view_descriptions": {v: cluster.VIEW_DESCRIPTIONS[v] for v in cluster.VIEWS
-                              if any(v in (i.get("views") or {}) for i in result["sets"].values())},
+        "view_descriptions": {v: cluster.view_description(v)
+                              for v in dict.fromkeys(v for i in result["sets"].values() for v in (i.get("views") or {}))},
         "outputs": {k: Path(v).name for k, v in outputs.items() if k != "summary"},
         "notes": ["cluster numbers are per view and per slide; 0 is the largest cluster",
                   "columns of the labels table: <set>_<view>_<method>_k<k>; empty outside the set",
-                  "agreement rows with method leiden_vs_kmeans compare the two methods on the same view"],
+                  "agreement rows with method leiden_vs_kmeans compare the two methods on the same view",
+                  "views <view>.<recipe>: an LBP view prepared with an alternative recipe (--lbp-recipes)"],
     }
+    if red_info is not None:
+        summary["redundancy"] = red_info
     Path(outputs["summary"]).write_text(json.dumps(lineage._jsonable(summary), indent=2))
     inputs = {role: Path(args.input_dir) / f"{prefix}.{suffix}" for role, suffix in
               (("tiles", "tiles.tsv.gz"), ("uni2h", "uni2h.h5"), ("lbp", "lbp.h5"), ("counts", "counts.h5"))}
@@ -206,6 +293,44 @@ def main(argv=None):
         packages=["scikit-learn", "igraph", "umap-learn", "numpy", "scipy", "pandas"]))
     for s, info in result["sets"].items():
         log.info("%s, set %s: %s", prefix, s, info.get("status"))
+
+
+def run_redundancy(sample: dict, result: dict, args, prefix: str, parents, process: str, outputs: dict) -> dict:
+    """The redundancy analysis of the set keep: tables, figures and what it did."""
+    s = "keep"
+    info = result["sets"].get(s, {})
+    if info.get("status") != "clustered":
+        return {"status": f"not computed: the set '{s}' was not clustered"}
+    clustered = info["views_clustered"]
+    views = ([v for v in clustered if v != "EXPRESSION"] if args.redundancy_views == "images"
+             else [v for v in args.redundancy_views if v in clustered])
+    tiles = sample["tiles"][result["masks"][s]]
+    mpp = (sample["provenance"].get("prepare") or {}).get("mpp_target")
+    red = redundancy.run(result["scores"][s], result["pc_variance"][s], tiles, views, s, mpp,
+                         n_folds=args.redundancy_folds, block_um=args.redundancy_block_um, seed=args.seed)
+    if red["info"]["status"] != "computed":
+        log.info("redundancy: %s", red["info"]["status"])
+        return red["info"]
+    files = {"redundancy": f"{prefix}.redundancy.tsv", "redundancy_pcs": f"{prefix}.redundancy_pcs.tsv.gz",
+             "redundancy_tiles": f"{prefix}.redundancy_tiles.tsv.gz"}
+    red["table"].to_csv(files["redundancy"], sep="\t", index=False, na_rep="NA", float_format="%.6g")
+    with gzip.open(files["redundancy_pcs"], "wt") as fh:
+        red["pcs"].to_csv(fh, sep="\t", index=False, na_rep="NA", float_format="%.6g")
+    with gzip.open(files["redundancy_tiles"], "wt") as fh:
+        red["tiles"].to_csv(fh, sep="\t", index=False, na_rep="NA", float_format="%.6g")
+    outputs.update(files)
+    source = lineage.source_text(process, {}, parents=parents,
+                                 context=f"{prefix}, set '{s}' ({len(tiles)} tiles), seed {args.seed}")
+    text = redundancy_captions(red, args, source)
+    for name, img in (("redundancy_keep", clusterplots.redundancy_figure(red, text["matrix"], prefix, s)),
+                      ("redundancy_maps_keep", clusterplots.redundancy_maps_figure(sample, tiles, red, text["maps"],
+                                                                                   prefix))):
+        if img is not None:
+            path = f"{prefix}.{name}.png"
+            img.save(path)
+            outputs[f"figure_{name}"] = path
+    log.info("redundancy: %d pairs of %d views", len(red["table"]), len(views))
+    return red["info"]
 
 
 if __name__ == "__main__":

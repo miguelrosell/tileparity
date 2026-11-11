@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.5.0 (2026-11-11)
+
+Two questions from the meeting with Mark Robinson and Samuel Gunz: what one image view knows that the other does not (redundancy), and whether the preparation of the LBP histograms is arbitrary (alternative preparations). Defaults unchanged.
+
+**Redundancy between the image views (`--redundancy`, with `--cluster`)**
+
+* For every ordered pair of image views of a slide (UNI2-h, LBP and the intensity statistics on each input set; set `keep`), the principal components of one view are predicted from those of the other with ridge regression, in a spatial cross-validation (square blocks of tissue of `--redundancy_block_um`, 1 mm, in `--redundancy_folds`, 5, folds). R² is the share of a view's variance that the other predicts; it is not symmetric, and the asymmetry tells which view contains the other's information. Also the R² of each component, and per tile the part that is not predicted.
+* Outputs in `cluster/`: `redundancy.tsv` (every pair), `redundancy_pcs.tsv.gz` (every component), `redundancy_tiles.tsv.gz` (per tile), `redundancy_keep.png` (the R² matrix and the curves per component for UNI2-h and LBP on the same pixels), `redundancy_maps_keep.png` (where each of the two has what the other does not predict), `cluster.json` → `redundancy`. `--redundancy_views` (default `images`) chooses the views.
+* The clustering keeps the principal components of every view for it, so both analyses describe the same thing.
+
+**Three preparations of the LBP histograms (`--cluster_lbp_recipes`, a diagnostic)**
+
+* `hellinger,scanpy,zscore`: besides the default preparation (proportions, square root, the same weight per channel and radius), every LBP view is prepared like expression (`scanpy`: counts per 10 000, log1p, the `--cluster_lbp_hvf` share of most variable bins with Scanpy's 'seurat' method, z-scores clipped at 10) and like UNI2-h (`zscore`), and clustered as views `<view>.scanpy` and `<view>.zscore`. Their labels and agreements are in `clusters.tsv.gz` and `cluster_agreement.tsv`; `cluster_lbp_recipes_<set>.png` compares the three against the reference view by k; the heatmaps, maps and contingency tables keep to the default views. `cluster.json` lists them (`recipe_views_clustered`, `lbp_recipes`), and `view_descriptions` describes them.
+
+**Organisation: three levels of parameters**
+
+* `nextflow.config`, the README and `docs/usage.md` group the parameters into the core run (on by default), optional analyses (`--qc_umap`, `--cluster`, `--redundancy`) and diagnostics (`--mask_compare`, `--lbp_center`, `--cluster_lbp_recipes`). No default changed.
+* New `docs/decisions.md`: every design decision, the alternatives kept, the diagnostic that re-checks it and the evidence so far.
+* `docs/rolandgarros.md` section 12: the run with four samples (the Visium HD slides of patients P2 and P5 added); `assets/cohort_a_10x_urls.tsv` has the download links of P1, P2 and P5. `docs/faq.md`: why the diagonal of the agreement heatmaps is not 1 (it compares Leiden and k-means on one view), and what agreement with expression does and does not say.
+
+**Other changes**
+
+* The colour bars of the figures take a label and a range.
+* Environments unchanged (no re-creation with `-profile conda`); container images 0.5.0; 106 unit tests.
+
 ## 0.4.1 (2026-11-10)
 
 LBP on the stain amounts themselves. UNI2-h needs three channels, so fastLBP has read the same three-channel images (`rgb`, `rgb_he`); LBP reads one channel at a time and can read the amounts of H and E directly. The new input sets measure how much fastLBP loses by reading the images made for UNI2-h.

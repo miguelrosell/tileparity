@@ -103,26 +103,44 @@ Relative paths are resolved against the samplesheet's folder. See [`assets/sampl
 
 ## Main parameters
 
+Parameters come in three levels (the same sections in [`nextflow.config`](nextflow.config), which lists every parameter with a comment):
+
+1. **Core**, on by default: the standard run (tiles, input images, UNI2-h, fastLBP, expression per tile, exports).
+2. **Optional analyses**, off by default: questions asked of the core outputs.
+3. **Diagnostics**, off by default: alternatives and checks that were used to take a design decision ([docs/decisions.md](docs/decisions.md)), kept so that the decision can be checked again on new data.
+
+**Core**
+
 | parameter | default | meaning |
 |---|---|---|
 | `--scales_mpp` | `0.2857,0.5,1.0` | target pixel sizes; tiles are 224 px, i.e. 64, 112 and 224 µm. Scales finer than a slide's native resolution are skipped (no upsampling). |
 | `--min_tissue` | `0.5` | minimum tissue fraction of a kept tile (`keep`) |
 | `--min_tissue_extract` | = `--min_tissue` | minimum tissue fraction for computing features (`extract`) |
 | `--mask_method` | `saturation` | automatic tissue mask: `saturation`, `grey` or `od` |
-| `--mask_compare` | `false` | also compare the mask with the other methods and finer resolutions |
 | `--hd_bin_um` | `8` | Visium HD bin size summed per tile |
 | `--visium_tiling` | `grid` | standard Visium / HEST: `grid` (spots split by area) or `spot` (tiles centred on spots) |
 | `--visium_split` | `multinomial` | how a spot's molecules are split between grid tiles: `multinomial` or `fraction` |
 | `--uni2h_inputs` | `rgb,rgb_he` | UNI2-h input sets: `rgb`, `rgb_he` |
 | `--lbp_channels` | `rgb,rgb_he` | fastLBP input sets: `rgb`, `rgb_he`, `he` (H and E), `h` (H alone), `e` (E alone) |
 | `--stain_vectors` | `slide` | H and E colours: estimated on each slide (`slide`) or the published ones (`standard`) |
-| `--lbp_center` | `false` | also store the LBP codes of the tiles' central pixels |
-| `--qc_umap` | `false` | interactive 3-D UMAP of every feature view per scale |
-| `--cluster` | `false` | cluster every view of every slide on its own and measure how much the views agree (`--cluster_k`, `--cluster_k_ref`, `--cluster_sets`, … in [docs/usage.md](docs/usage.md)) |
 | `--uni2h_weights` | — | local UNI2-h weights (recommended); otherwise downloaded with `HF_TOKEN` |
 | `--skip_uni2h`, `--skip_lbp`, `--skip_spe`, `--skip_anndata` | `false` | switch branches off |
 
-All parameters are listed with comments in [`nextflow.config`](nextflow.config).
+**Optional analyses**
+
+| parameter | default | meaning |
+|---|---|---|
+| `--qc_umap` | `false` | interactive 3-D UMAP of every feature view per scale |
+| `--cluster` | `false` | cluster every view of every slide on its own and measure how much the views agree (`--cluster_k`, `--cluster_k_ref`, `--cluster_sets`, … in [docs/usage.md](docs/usage.md)) |
+| `--redundancy` | `false` | with `--cluster`: how much of each image view the other views predict (cross-validated ridge regression between their principal components): redundant and view-specific information |
+
+**Diagnostics**
+
+| parameter | default | meaning |
+|---|---|---|
+| `--mask_compare` | `false` | compare the tissue mask with the other methods and finer resolutions |
+| `--lbp_center` | `false` | also store the LBP codes of the tiles' central pixels |
+| `--cluster_lbp_recipes` | `hellinger` | with `--cluster`: also prepare every LBP view like expression (`scanpy`) and like UNI2-h (`zscore`), and compare the three |
 
 ## Outputs
 
@@ -133,7 +151,7 @@ results/
 ├── <sample>/mpp<scale>/uni2h/     <id>.uni2h.h5      (Output2a)
 ├── <sample>/mpp<scale>/lbp/       <id>.lbp.h5        (Output2b), lbp_qc.png
 ├── <sample>/mpp<scale>/st/        <id>.counts.h5     (Output3), per-tile summary
-├── <sample>/mpp<scale>/cluster/   [clusters of every view, agreement between views, figures]
+├── <sample>/mpp<scale>/cluster/   [clusters of every view, agreement between views, figures; redundancy between views]
 ├── export/mpp<scale>/spe/         <id>.rds + combined_mpp<scale>.rds
 ├── export/mpp<scale>/anndata/     <id>.h5ad + combined_mpp<scale>.h5ad
 ├── qc/mpp<scale>/                 [3-D UMAP page]
@@ -159,21 +177,22 @@ A new extractor is one module that reads `[meta, resampled.tif, tiles.tsv.gz, pr
 
 ## Status and roadmap
 
-Version 0.4.0 (changes in [CHANGELOG.md](CHANGELOG.md)). What has been run so far:
+Version 0.5.0 (changes in [CHANGELOG.md](CHANGELOG.md)). What has been run so far:
 
-* the Python library: 98 unit tests, including LBP histograms identical to fastLBP's whole-image run, the H&E-only image against a direct computation, and the clustering's expression recipe, neighbour graph and Leiden partition identical to Scanpy's;
-* two real samples (the Visium HD colorectal cancer slide P1 and the HEST-1k Visium sample ZEN36) at 0.5 µm/px on the UZH server with tileparity 0.3.0: conda route, one SLURM job, UNI2-h in fp16 on an NVIDIA L4, about 35 minutes;
-* the whole workflow on the synthetic test data without containers, with every option of the test profile switched on and both exports (AnnData; SpatialExperiment with R 4.3 / SpatialExperiment 1.12), with Nextflow 25.04.0 and 26.10.3; stub runs with 25.04.0, 25.04.7, 26.04.7 and 26.10.3, and `nextflow lint` without errors with 25.04.7, 26.04.7 and 26.10.3 (the linter of 25.04.0 wrongly reports `meta` as undefined in `conf/modules.config`);
+* the Python library: 106 unit tests, including LBP histograms identical to fastLBP's whole-image run, the H&E-only image against a direct computation, and the clustering's expression recipe, neighbour graph and Leiden partition identical to Scanpy's;
+* two real samples (the Visium HD colorectal cancer slide P1 and the HEST-1k Visium sample ZEN36) at 0.5 µm/px on the UZH server: with tileparity 0.3.0 (the core run, about 35 minutes), 0.4.0 (with `--cluster`) and 0.4.1 (with `--lbp_channels rgb,rgb_he,he,h,e`); conda route, one SLURM job, UNI2-h in fp16 on an NVIDIA L4. The 0.4.1 run recomputed every step and gave exactly the same cluster labels as the 0.4.0 run in every view, UNI2-h included;
+* the whole workflow on the synthetic test data without containers, with every option of the test profile switched on, with Nextflow 25.04.0 and 26.10.3; stub runs and `nextflow lint` with recent Nextflow versions (the linter of 25.04.0 wrongly reports `meta` as undefined in `conf/modules.config`);
 * GitHub Actions: `CI` runs the unit tests, a stub run with the oldest supported and the latest Nextflow, and lint with the latest, on every push; `Containers` builds the three images and runs the test profile inside them in Docker.
 
-The clustering (`--cluster`) has been run on the synthetic test data only so far; its first real run will be the two samples above.
+The redundancy analysis and the LBP recipes of 0.5.0 have been run on synthetic data only so far; their first real run will be four colorectal cancer samples ([docs/rolandgarros.md](docs/rolandgarros.md), section 12).
 
 Not yet implemented:
 
 * stain normalisation to reference colours as an option (the H and E colours are already estimated per slide in Process 1b);
 * an input mode for pre-tiled image collections such as NCT-CRC-HE-100K;
 * cell-level units (segmented nuclei) as a third tiling mode;
-* the analysis layer beyond the per-slide clustering (comparing and integrating the views across slides).
+* smaller tiles for fastLBP only (Visium HD), with a noise ceiling for the expression of small tiles, to find the tile size and radii at which LBP agrees most with expression;
+* the analysis layer beyond the per-slide clustering and redundancy: how much expression each view explains beyond the other one, gene by gene, and comparing the views across slides.
 
 ## Citations
 

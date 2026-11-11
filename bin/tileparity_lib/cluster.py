@@ -21,7 +21,11 @@ INTENSITY_HE and EXPRESSION (what each one is: ``VIEW_DESCRIPTIONS``). Preparati
 
 * UNI2-h and INTENSITY_HE: every column standardised (z-score over the set's tiles);
 * LBP: proportions, square root (Hellinger) and the same weight for every channel and
-  radius (:func:`tileparity_lib.qcumap.lbp_recipe`, as in the 3-D UMAP QC);
+  radius (:func:`tileparity_lib.qcumap.lbp_recipe`, as in the 3-D UMAP QC). With
+  ``--cluster_lbp_recipes`` every LBP view is also prepared in two other ways and clustered
+  as separate views named ``<view>.<recipe>``, to compare the preparations:
+  ``scanpy`` (like EXPRESSION: counts per 10 000, log1p, the most variable bins,
+  z-scores clipped at 10) and ``zscore`` (like UNI2-h: every bin z-scored);
 * EXPRESSION: Scanpy's standard recipe - counts per 10 000, log1p, the ``--cluster_n_hvg``
   most variable genes (dispersion normalised within 20 bins of mean expression, Scanpy's
   'seurat' flavour), z-scores clipped at 10.
@@ -73,6 +77,18 @@ VIEW_DESCRIPTIONS = {
     "INTENSITY_HE": "mean, SD and 10th, 50th and 90th percentiles of the H and E amounts (no texture)",
     "EXPRESSION": "gene expression of the tile",
 }
+# preparations of the LBP views: the default one (unsuffixed views) and two alternatives
+# (views <view>.<recipe>) to compare them (--cluster_lbp_recipes)
+LBP_RECIPES = ("hellinger", "scanpy", "zscore")
+RECIPE_DESCRIPTIONS = {
+    "hellinger": ("proportions, square root (Hellinger), the same weight for every channel and radius (as in "
+                  "multiple factor analysis)"),
+    "scanpy": ("like EXPRESSION, Scanpy's recipe on the bin counts: counts per 10 000, log1p, the most variable bins "
+               "(Scanpy's 'seurat' flavour), z-scores clipped at 10"),
+    "zscore": "like UNI2-h: every bin z-scored, no transformation and no weights",
+}
+RECIPE_SHORT = {"hellinger": "Hellinger + equal block weights (default)", "scanpy": "like expression (Scanpy recipe)",
+                "zscore": "like UNI2-h (z-scores)"}
 METHODS = ("leiden", "kmeans")
 SETS = ("keep", "extended")
 DEFAULT_K = (2, 3, 4, 6, 8, 10, 12, 15)
@@ -123,6 +139,31 @@ def tile_sets(sample: dict, min_counts_ratio: float) -> tuple[dict, dict]:
 
 
 # ---- views -------------------------------------------------------------------------------------------
+def variant(view: str, recipe: str) -> str:
+    """Name of an LBP view prepared with ``recipe``: the view itself for the default recipe,
+    else ``<view>.<recipe>``."""
+    return view if recipe == "hellinger" else f"{view}.{recipe}"
+
+
+def split_variant(name: str) -> tuple[str, str]:
+    """(view, recipe) of a view name (``LBP_RGB.scanpy`` -> ``("LBP_RGB", "scanpy")``)."""
+    base, _, recipe = str(name).partition(".")
+    return base, recipe or "hellinger"
+
+
+def view_description(name: str) -> str:
+    """What a view is, including the LBP preparation of a recipe variant."""
+    base, recipe = split_variant(name)
+    text = VIEW_DESCRIPTIONS.get(base, base)
+    return text if recipe == "hellinger" else f"{text}, prepared {RECIPE_SHORT.get(recipe, recipe)}"
+
+
+def recipe_list(recipes) -> list[str]:
+    """The default recipe first, then the requested alternatives in canonical order."""
+    asked = set(recipes or ())
+    return ["hellinger"] + [r for r in LBP_RECIPES if r != "hellinger" and r in asked]
+
+
 def zscore(X: np.ndarray, clip: float | None = None) -> np.ndarray:
     """Columns centred and divided by their standard deviation (ddof = 1, as Scanpy's
     ``scale``); constant columns become 0."""
@@ -178,12 +219,29 @@ def expression_features(Y_genes_x_tiles, n_hvg: int) -> tuple[np.ndarray, int]:
     return zscore(N[:, idx].toarray(), clip=10.0), detected
 
 
-def view_matrices(sample: dict, sel: np.ndarray, views, n_hvg: int) -> dict:
+def lbp_scanpy(X: np.ndarray, fraction: float) -> tuple[np.ndarray, int]:
+    """LBP bin counts (tiles x bins) prepared like EXPRESSION: counts per 10 000, log1p, the
+    ``fraction`` most variable bins (Scanpy's 'seurat' flavour), z-scores clipped at 10.
+    Returns (matrix, number of bins kept)."""
+    from scipy import sparse
+
+    X = np.asarray(X, float)
+    totals = X.sum(axis=1)
+    totals[totals == 0] = 1.0
+    logN = np.log1p(X * (1e4 / totals)[:, None])
+    idx = highly_variable_genes(sparse.csr_matrix(logN), max(1, int(round(fraction * X.shape[1]))))
+    return zscore(logN[:, idx], clip=10.0), int(len(idx))
+
+
+def view_matrices(sample: dict, sel: np.ndarray, views, n_hvg: int, lbp_recipes=("hellinger",),
+                  lbp_hvf: float = 0.3) -> dict:
     """{view: (prepared tiles x features matrix of the selected tiles, description)} for the
-    requested views that exist in the sample."""
+    requested views that exist in the sample; LBP views also as ``<view>.<recipe>`` for every
+    alternative recipe in ``lbp_recipes``."""
     from scipy import sparse
 
     out = {}
+    recipes = recipe_list(lbp_recipes)
     tiles = sample["tiles"]
     tile_px = int(tiles["tile_px"].iloc[0]) if len(tiles) else 224
     for v in views:
@@ -199,6 +257,12 @@ def view_matrices(sample: dict, sel: np.ndarray, views, n_hvg: int) -> dict:
             if v.startswith("LBP"):
                 out[v] = (qcumap.lbp_recipe(X, cols, tile_px),
                           f"{X.shape[1]} LBP bins: proportions, Hellinger, equal weight per channel and radius")
+                if "scanpy" in recipes:
+                    M, kept = lbp_scanpy(X, lbp_hvf)
+                    out[variant(v, "scanpy")] = (M, f"the {kept} most variable of {X.shape[1]} LBP bins: counts per "
+                                                    "10 000, log1p, z-scores clipped at 10 (like EXPRESSION)")
+                if "zscore" in recipes:
+                    out[variant(v, "zscore")] = (zscore(X), f"{X.shape[1]} LBP bins, z-scores (like UNI2-h)")
             else:
                 out[v] = (zscore(X), f"{X.shape[1]} columns, z-scores")
     return out
@@ -427,18 +491,22 @@ AGREEMENT_COLUMNS = ["set", "method", "k", "view_a", "view_b", "n_tiles", "k_a",
 
 def run(sample: dict, views=VIEWS, ks=DEFAULT_K, k_ref: int = 8, methods=METHODS, sets=SETS, n_pcs: int = 50,
         n_neighbors: int = 15, n_hvg: int = 2000, min_counts_ratio: float = 0.1, null_shifts: int = 100,
-        seed: int = 0, log=None) -> dict:
+        seed: int = 0, lbp_recipes=("hellinger",), lbp_hvf: float = 0.3, log=None) -> dict:
     """Cluster every view of one sample in every tile set and measure the agreement.
 
     Returns {"sets": {set: info}, "masks": {set: bool over the sample's tiles},
-    "labels": {set: {(view, method, k): labels over the set's tiles}}, "agreement":
-    DataFrame}. ``info`` records the definition and size of the set, the k used, the
-    reference view and, per view, the features, PCs and Leiden resolutions."""
+    "labels": {set: {(view, method, k): labels over the set's tiles}}, "scores": {set:
+    {view: principal components}}, "pc_variance": {set: {view: share of variance they
+    keep}}, "agreement": DataFrame}. ``info`` records the definition and size of the set,
+    the k used, the reference view and, per view, the features, PCs and Leiden resolutions.
+    ``info["views_clustered"]`` lists the views with the default preparation;
+    ``info["recipe_views_clustered"]`` the LBP views prepared with an alternative recipe."""
     masks, set_info = tile_sets(sample, min_counts_ratio)
     tiles = sample["tiles"]
     ks = sorted({int(k) for k in ks if int(k) >= 2})
     methods = [m for m in METHODS if m in methods]
-    out = {"sets": {}, "masks": {}, "labels": {}}
+    recipes = recipe_list(lbp_recipes)
+    out = {"sets": {}, "masks": {}, "labels": {}, "scores": {}, "pc_variance": {}}
     rows = []
     for s in sets:
         sel = masks[s]
@@ -460,8 +528,11 @@ def run(sample: dict, views=VIEWS, ks=DEFAULT_K, k_ref: int = 8, methods=METHODS
         info["k_ref"] = k_ref if k_ref in usable else max([k for k in usable if k <= k_ref] or [min(usable)])
         info["views"] = {}
         labels: dict = {}
-        for v, (X, description) in view_matrices(sample, sel, views, n_hvg).items():
+        scores: dict = {}
+        pc_variance: dict = {}
+        for v, (X, description) in view_matrices(sample, sel, views, n_hvg, recipes, lbp_hvf).items():
             P, evr = pca(X, n_pcs, seed)
+            scores[v], pc_variance[v] = P, float(evr.sum())
             vinfo = {"features": description, "n_features": int(X.shape[1]), "n_pcs": int(P.shape[1]),
                      "pc_variance_explained": round(float(evr.sum()), 4)}
             if P.shape[1] == 0:
@@ -487,25 +558,33 @@ def run(sample: dict, views=VIEWS, ks=DEFAULT_K, k_ref: int = 8, methods=METHODS
             if log:
                 log.info("%s: %s clustered (%d tiles, %d PCs)", s, v, n, P.shape[1])
         done = [v for v in views if info["views"].get(v, {}).get("status") == "clustered"]
+        alternatives = [variant(v, r) for v in done if v.startswith("LBP") for r in recipes[1:]
+                        if info["views"].get(variant(v, r), {}).get("status") == "clustered"]
         info["views_clustered"] = done
+        if alternatives:
+            info["recipe_views_clustered"] = alternatives
+            info["lbp_recipes"] = {r: RECIPE_DESCRIPTIONS[r] for r in recipes}
         info["reference_view"] = reference_view(done)
+        everything = done + alternatives
         sub = tiles[sel]
         pairs = torus_pairs(sub["row"], sub["col"], null_shifts, seed) if on_grid(sub) and null_shifts > 0 else []
         info["null"] = ({"moves": len(pairs), "min_shift": 0.2, "min_overlap": 0.3} if pairs else
                         {"moves": 0, "note": "not computed: tiles not on a grid (spot tiles), or no possible move"})
         for m in methods:
             for k in usable:
-                for i, a in enumerate(done):
-                    for b in done[i + 1:]:
+                for i, a in enumerate(everything):
+                    for b in everything[i + 1:]:
                         rows.append(_row(s, m, k, a, b, labels[(a, m, k)], labels[(b, m, k)], pairs))
         if len(methods) == 2:
             for k in usable:
-                for v in done:
+                for v in everything:
                     rows.append(_row(s, METHOD_PAIR, k, v, v, labels[(v, "leiden", k)], labels[(v, "kmeans", k)], []))
         info["status"] = "clustered"
         out["sets"][s] = info
         out["labels"][s] = labels
         out["masks"][s] = sel
+        out["scores"][s] = {v: scores[v] for v in everything}
+        out["pc_variance"][s] = {v: pc_variance[v] for v in everything}
     out["agreement"] = pd.DataFrame(rows, columns=AGREEMENT_COLUMNS)
     return out
 
@@ -531,9 +610,15 @@ def labels_table(sample: dict, result: dict, views=VIEWS) -> pd.DataFrame:
         if s in result["masks"]:
             cols[f"in_{s}"] = result["masks"][s]
     order = {v: i for i, v in enumerate(views)}
+
+    def key(t):  # the default views in the order given, then the recipe variants
+        base, recipe = split_variant(t[0])
+        return (recipe != "hellinger", order.get(base, 99), LBP_RECIPES.index(recipe) if recipe in LBP_RECIPES else 9,
+                METHODS.index(t[1]), t[2])
+
     for s, labs in result["labels"].items():
         idx = np.flatnonzero(result["masks"][s])
-        for (v, m, k) in sorted(labs, key=lambda t: (order.get(t[0], 99), METHODS.index(t[1]), t[2])):
+        for (v, m, k) in sorted(labs, key=key):
             col = pd.array([pd.NA] * len(tiles), dtype="Int64")
             col[idx] = labs[(v, m, k)]
             cols[LABEL_COLUMN.format(set=s, view=v, method=m, k=k)] = col

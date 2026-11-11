@@ -104,6 +104,12 @@ Leiden's resolution decides how many clusters come out, so for every k the resol
 **What ARI means "the views agree"?**
 1 means identical partitions, about 0 means no more agreement than random labels. Because cluster maps are made of patches, two unrelated maps already agree a little (often an ARI of 0.1–0.2); the spatial null measures this chance level for each pair by moving one map over the other. An ARI well above the null's 95th percentile (the small number in the heatmaps, the shaded band in the curves) is real agreement. Compare views at the same k: ARI changes with k.
 
+**Why is the diagonal of the agreement heatmap not 1?**
+Because it is not a view compared with itself (that would always be 1). The grey diagonal is the ARI between the two clusterings of the same view, Leiden and k-means, at that k: how well defined the view's clusters are. Near 1, both methods find the same groups; around 0.4–0.6, the view has no sharp boundaries at that k and each method cuts it differently, so differences between views of a few hundredths are within that variation.
+
+**Does a view that agrees more with expression carry more information?**
+Not necessarily: agreement says which view divides the tissue more like expression does. Whether a view holds information another lacks is what `--redundancy` measures (how much of each view the other predicts), and whether that information relates to biology is a further question.
+
 **Why one slide at a time?**
 Clustering slides together would mostly separate the slides (scanner, staining, section) instead of tissue regions. Cluster numbers are therefore per slide (and per view): cluster 3 of one slide has nothing to do with cluster 3 of another.
 

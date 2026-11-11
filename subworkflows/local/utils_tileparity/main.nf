@@ -98,6 +98,9 @@ def validateParams() {
     if (params.cluster) {
         validateCluster()
     }
+    if (params.redundancy && !params.cluster) {
+        error("--redundancy runs inside the clustering step: add --cluster")
+    }
     if (params.skip_uni2h && params.skip_lbp) {
         log.warn("--skip_uni2h and --skip_lbp are both set: only tiles and expression per tile will be produced")
     }
@@ -128,6 +131,23 @@ def validateCluster() {
     }
     if (!((params.cluster_k_ref as Integer) in ks.collect { v -> v as Integer })) {
         log.warn("--cluster_k_ref ${params.cluster_k_ref} is not in --cluster_k '${params.cluster_k}': the figures use the closest k below it")
+    }
+    listParam('cluster_lbp_recipes', params.cluster_lbp_recipes, ['hellinger', 'scanpy', 'zscore'])
+    def hvf = params.cluster_lbp_hvf.toString()
+    if (!(hvf ==~ /[0-9]*\.?[0-9]+/) || (hvf as Double) <= 0 || (hvf as Double) > 1) {
+        error("--cluster_lbp_hvf '${params.cluster_lbp_hvf}' must be a share of the LBP bins, above 0 and at most 1")
+    }
+    if (params.redundancy) {
+        if (params.redundancy_views.toString() != 'images') {
+            listParam('redundancy_views', params.redundancy_views,
+                      ['UNI2H_RGB', 'UNI2H_RGB_HE', 'LBP_RGB', 'LBP_RGB_HE', 'LBP_HE', 'LBP_H', 'LBP_E', 'INTENSITY_HE',
+                       'EXPRESSION'])
+        }
+        wholeParam('redundancy_folds', params.redundancy_folds, 2)
+        def block = params.redundancy_block_um.toString()
+        if (!(block ==~ /[0-9]*\.?[0-9]+/) || (block as Double) <= 0) {
+            error("--redundancy_block_um '${params.redundancy_block_um}' must be a positive number of micrometres")
+        }
     }
 }
 
@@ -272,7 +292,8 @@ def summaryText(int nSamples, List scales) {
     extractors  : ${[params.skip_uni2h ? null : "UNI2-h (${params.uni2h_inputs})" + (params.uni2h_test_mode ? ' [TEST MODE]' : ''), params.skip_lbp ? null : "fastLBP (${params.lbp_channels}${params.lbp_center ? ', + centre' : ''})"].findAll().join(', ')}
     stains      : H and E vectors ${params.stain_vectors == 'slide' ? 'estimated on each slide (Macenko)' : 'standard (Ruifrok & Johnston)'}
     exports     : ${[params.skip_spe ? null : 'SpatialExperiment', params.skip_anndata ? null : 'AnnData', params.qc_umap ? '3-D UMAP QC' : null].findAll().join(', ')}
-    clustering  : ${params.cluster ? "per slide, ${params.cluster_methods} at k = ${params.cluster_k} (figures at k = ${params.cluster_k_ref}), sets ${params.cluster_sets}" : 'off (--cluster)'}
+    clustering  : ${params.cluster ? "per slide, ${params.cluster_methods} at k = ${params.cluster_k} (figures at k = ${params.cluster_k_ref}), sets ${params.cluster_sets}${params.cluster_lbp_recipes.toString() != 'hellinger' ? ", LBP prepared as ${params.cluster_lbp_recipes}" : ''}" : 'off (--cluster)'}
+    redundancy  : ${params.redundancy ? "${params.redundancy_views.toString() == 'images' ? 'the image' : params.redundancy_views} views, ${params.redundancy_folds} folds of blocks of ${params.redundancy_block_um} um" : 'off (--redundancy)'}
     gpu         : ${params.use_gpu}
     outdir      : ${params.outdir}
     --------------------------------------------------

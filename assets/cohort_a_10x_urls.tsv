@@ -1,11 +1,11 @@
 sample	kind	url
-A_P1_CRC	image	TODO: microscope image (.btf/.tif) link from the 10x page of P1 CRC
-A_P1_CRC	binned_outputs	TODO: "Binned outputs" (.tar.gz) link
-A_P2_CRC	image	TODO
-A_P2_CRC	binned_outputs	TODO
-A_P5_CRC	image	TODO
-A_P5_CRC	binned_outputs	TODO
+A_P1_CRC	image	https://cf.10xgenomics.com/samples/spatial-exp/3.0.0/Visium_HD_Human_Colon_Cancer/Visium_HD_Human_Colon_Cancer_tissue_image.btf
+A_P1_CRC	binned_outputs	https://cf.10xgenomics.com/samples/spatial-exp/3.0.0/Visium_HD_Human_Colon_Cancer/Visium_HD_Human_Colon_Cancer_binned_outputs.tar.gz
+A_P2_CRC	image	https://cf.10xgenomics.com/samples/spatial-exp/3.0.0/Visium_HD_Human_Colon_Cancer_P2/Visium_HD_Human_Colon_Cancer_P2_tissue_image.btf
+A_P2_CRC	binned_outputs	https://cf.10xgenomics.com/samples/spatial-exp/3.0.0/Visium_HD_Human_Colon_Cancer_P2/Visium_HD_Human_Colon_Cancer_P2_binned_outputs.tar.gz
+A_P5_CRC	image	https://cf.10xgenomics.com/samples/spatial-exp/3.0.0/Visium_HD_Human_Colon_Cancer_P5/Visium_HD_Human_Colon_Cancer_P5_tissue_image.btf
+A_P5_CRC	binned_outputs	https://cf.10xgenomics.com/samples/spatial-exp/3.0.0/Visium_HD_Human_Colon_Cancer_P5/Visium_HD_Human_Colon_Cancer_P5_binned_outputs.tar.gz
 A_P3_NAT	image	TODO
 A_P3_NAT	binned_outputs	TODO
 A_P5_NAT	image	TODO
-A_P5_NAT	binned_outputs	TODO
+A_P5_NAT	binned_outputs	https://cf.10xgenomics.com/samples/spatial-exp/3.0.0/Visium_HD_Human_Colon_Normal_P5/Visium_HD_Human_Colon_Normal_P5_binned_outputs.tar.gz

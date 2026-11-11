@@ -323,3 +323,61 @@ def test_small_or_repeated_sets_are_not_clustered():
     table = cluster.labels_table(sample, result)
     assert table.columns.tolist() == ["tile_id", "in_keep", "in_extended", "keep_UNI2H_RGB_kmeans_k2",
                                       "keep_UNI2H_RGB_kmeans_k3"]
+
+
+def test_lbp_recipes_and_names():
+    assert cluster.recipe_list(["zscore", "scanpy"]) == ["hellinger", "scanpy", "zscore"]
+    assert cluster.recipe_list([]) == ["hellinger"]
+    assert cluster.variant("LBP_RGB", "hellinger") == "LBP_RGB"
+    assert cluster.variant("LBP_RGB_HE", "scanpy") == "LBP_RGB_HE.scanpy"
+    assert cluster.split_variant("LBP_RGB_HE.zscore") == ("LBP_RGB_HE", "zscore")
+    assert cluster.split_variant("UNI2H_RGB") == ("UNI2H_RGB", "hellinger")
+    assert cluster.view_description("LBP_H.scanpy").endswith("prepared like expression (Scanpy recipe)")
+    rng = np.random.default_rng(0)
+    probs = rng.dirichlet(np.ones(40), size=50)
+    X = np.vstack([rng.multinomial(50176, p) for p in probs]).astype(float)
+    X[:, 5] = 0  # an empty bin is never selected
+    M, kept = cluster.lbp_scanpy(X, 0.25)
+    assert kept == 10 and M.shape == (50, 10)
+    assert np.allclose(M.mean(axis=0), 0, atol=1e-9) and np.allclose(M.std(axis=0, ddof=1), 1)
+
+
+def test_cli_compares_lbp_recipes_and_measures_redundancy(tmp_path, monkeypatch):
+    import tp_cluster
+
+    data, out = tmp_path / "data", tmp_path / "out"
+    data.mkdir()
+    out.mkdir()
+    _write_slide(data)
+    prefix = "S_mpp0.5000"
+    monkeypatch.chdir(out)
+    tp_cluster.main(["--input-dir", str(data), "--sets", "keep", "--k", "2,4", "--k-ref", "4", "--null-shifts", "5",
+                     "--lbp-recipes", "hellinger,scanpy,zscore", "--redundancy", "--redundancy-folds", "3",
+                     "--redundancy-block-um", "300"])
+    labels = pd.read_csv(out / f"{prefix}.clusters.tsv.gz", sep="\t", dtype=str, keep_default_na=False)
+    for v in ("LBP_RGB", "LBP_RGB.scanpy", "LBP_RGB.zscore"):
+        assert f"keep_{v}_leiden_k4" in labels.columns
+    # the default views first, then the recipe variants
+    cols = [c for c in labels.columns if c.endswith("_leiden_k4")]
+    assert cols.index("keep_EXPRESSION_leiden_k4") < cols.index("keep_LBP_RGB.scanpy_leiden_k4")
+    table = pd.read_csv(out / f"{prefix}.cluster_agreement.tsv", sep="\t")
+    assert ((table["view_a"] == "LBP_RGB.zscore") | (table["view_b"] == "LBP_RGB.zscore")).any()
+    summary = json.loads((out / f"{prefix}.cluster.json").read_text())
+    keep = summary["sets"]["keep"]
+    assert keep["recipe_views_clustered"] == ["LBP_RGB.scanpy", "LBP_RGB.zscore"]
+    assert "LBP_RGB.scanpy" not in keep["views_clustered"] and set(keep["lbp_recipes"]) == set(cluster.LBP_RECIPES)
+    assert "Scanpy" in summary["view_descriptions"]["LBP_RGB.scanpy"]
+    red = summary["redundancy"]
+    assert red["status"] == "computed" and red["views"] == ["UNI2H_RGB", "UNI2H_RGB_HE", "LBP_RGB", "INTENSITY_HE"]
+    r = pd.read_csv(out / f"{prefix}.redundancy.tsv", sep="\t")
+    assert len(r) == 4 * 3 and set(r["predictor"]) == set(red["views"])
+    # every view sees the same 4 regions: UNI2-h predicts a good part of LBP
+    assert r[(r["predictor"] == "UNI2H_RGB") & (r["target"] == "LBP_RGB")]["r2"].iloc[0] > 0.2
+    tiles = pd.read_csv(out / f"{prefix}.redundancy_tiles.tsv.gz", sep="\t")
+    assert "unexplained_LBP_RGB_from_UNI2H_RGB" in tiles.columns and len(tiles) == keep["n_tiles"]
+    for name in ("cluster_lbp_recipes_keep", "redundancy_keep", "redundancy_maps_keep", "cluster_agreement_keep",
+                 "cluster_maps_keep"):
+        assert (out / f"{prefix}.{name}.png").exists(), name
+    for key in ("redundancy", "redundancy_pcs", "redundancy_tiles", "figure_redundancy_keep",
+                "figure_lbp_recipes_keep"):
+        assert key in summary["outputs"]
