@@ -118,43 +118,76 @@ def colour_bar(width: int = 260, label: str = "ARI", top: float = 1.0) -> Image.
 
 
 # ---- the agreement figure ----------------------------------------------------------------------------------
+def _matrix(t: pd.DataFrame, views: list[str], value: str) -> np.ndarray:
+    M = np.full((len(views), len(views)), np.nan)
+    for r in t.itertuples(index=False):
+        if r.view_a in views and r.view_b in views:
+            i, j = views.index(r.view_a), views.index(r.view_b)
+            M[i, j] = M[j, i] = getattr(r, value)
+    return M
+
+
 def agreement_figure(table: pd.DataFrame, info: dict, set_name: str, methods: list[str], caption: dict,
                      prefix: str) -> Image.Image | None:
+    """Per method: ARI between every pair of views at the k shown (with its spatial null), the
+    ARI averaged over every k (with the corrected ARI), and the ARI of every view with the
+    reference view by k (with the null band and the k shown marked)."""
     views = info["views_clustered"]
     if len(views) < 2:
         return None
-    k_ref, ref = info["k_ref"], info["reference_view"]
+    ref = info["reference_view"]
+    k_show = info.get("k_show") or {m: info["k_ref"] for m in methods}
+    auto = str(info.get("k_show_rule", "")).startswith("auto")
     t = table[table["set"] == set_name]
-    heat, charts = [], []
+    same = t[(t["k_a"] == t["k"]) & (t["k_b"] == t["k"])]
+    heat, means, charts = [], [], []
     for m in methods:
-        tm = t[(t["method"] == m) & (t["k"] == k_ref) & t["view_a"].isin(views) & t["view_b"].isin(views)]
-        M = np.full((len(views), len(views)), np.nan)
+        k = k_show[m]
+        name = "Leiden" if m == "leiden" else "k-means"
+        tm = t[(t["method"] == m) & (t["k"] == k)]
+        M = _matrix(tm, views, "ari")
         notes = [["" for _ in views] for _ in views]
         for r in tm.itertuples(index=False):
-            i, j = views.index(r.view_a), views.index(r.view_b)
-            M[i, j] = M[j, i] = r.ari
-            if np.isfinite(r.null_ari_p95):
-                notes[i][j] = notes[j][i] = f"null {r.null_ari_p95:.2f}"
+            if r.view_a in views and r.view_b in views and np.isfinite(r.null_ari_p95):
+                i, j = views.index(r.view_a), views.index(r.view_b)
+                notes[i][j] = notes[j][i] = (f"null {r.null_ari_p95:.2f}" if r.ari > r.null_ari_p95
+                                             else f"<= null {r.null_ari_p95:.2f}")
         diag = None
         if len(methods) == 2:
-            d = t[(t["method"] == cluster.METHOD_PAIR) & (t["k"] == k_ref) & t["view_a"].isin(views)]
+            d = t[(t["method"] == cluster.METHOD_PAIR) & (t["k"] == k) & t["view_a"].isin(views)]
             d = d.set_index("view_a")["ari"]
             diag = [float(d.get(v, np.nan)) for v in views]
-        name = "Leiden" if m == "leiden" else "k-means"
-        heat.append(heatmap(M, views, f"{name}, k = {k_ref}: ARI between views", notes, diag))
+        why = " (best agreement with " + str(ref) + ")" if auto else ""
+        heat.append(heatmap(M, views, f"{name}, k = {k}{why}: ARI between views", notes, diag))
+        sm = same[same["method"] == m]
+        g = sm.groupby(["view_a", "view_b"], sort=False)
+        mean = g["ari"].mean().reset_index()
+        corr = g["ari_corrected"].mean().reset_index() if "ari_corrected" in sm else None
+        Mm = _matrix(mean, views, "ari")
+        notes_m = [["" for _ in views] for _ in views]
+        if corr is not None:
+            for r in corr.itertuples(index=False):
+                if r.view_a in views and r.view_b in views and np.isfinite(r.ari_corrected):
+                    i, j = views.index(r.view_a), views.index(r.view_b)
+                    notes_m[i][j] = notes_m[j][i] = f"corr. {r.ari_corrected:.2f}"
+        diag_m = None
+        if len(methods) == 2:
+            d = t[(t["method"] == cluster.METHOD_PAIR) & t["view_a"].isin(views)].groupby("view_a")["ari"].mean()
+            diag_m = [float(d.get(v, np.nan)) for v in views]
+        ks = ", ".join(map(str, info["k"]))
+        means.append(heatmap(Mm, views, f"{name}, mean over k = {ks}", notes_m, diag_m))
         series = []
         for v in views:
             if v == ref:
                 continue
             a, b = sorted((v, ref), key=views.index)
-            rows = t[(t["method"] == m) & (t["view_a"] == a) & (t["view_b"] == b)].sort_values("k")
-            rows = rows[(rows["k_a"] == rows["k"]) & (rows["k_b"] == rows["k"])]  # same k in both partitions
+            rows = sm[(sm["view_a"] == a) & (sm["view_b"] == b)].sort_values("k")
             s = {"name": v, "x": rows["k"].to_numpy(float), "y": rows["ari"].to_numpy(float),
                  "colour": VIEW_COLOURS.get(v, figures.SERIES[len(series) % len(figures.SERIES)])}
             if rows["null_ari_p95"].notna().all() and len(rows):
                 s["lo"], s["hi"] = rows["null_ari_p05"].to_numpy(float), rows["null_ari_p95"].to_numpy(float)
             series.append(s)
-        width = max(heat[-1].width, 460)
+        width = max(heat[-1].width, means[-1].width, 460)
         if any(len(s["x"]) for s in series):
             # a fixed scale, comparable between slides; slightly negative null values are drawn at 0
             lo = min([0.0] + [float(np.nanmin(np.r_[s["y"], s.get("lo", s["y"])])) for s in series if len(s["x"])])
@@ -163,17 +196,18 @@ def agreement_figure(table: pd.DataFrame, info: dict, set_name: str, methods: li
                 if "lo" in s:
                     s["lo"] = np.maximum(s["lo"], y0)
             chart = figures.line_chart(series, "k (number of clusters)", f"ARI with {ref}", size=(width, 330),
-                                       y_range=(y0, 1.0), x_ticks=info["k"])
+                                       y_range=(y0, 1.0), x_ticks=info["k"], v_lines=[(k, f"k shown = {k}")])
         else:
             chart = Image.new("RGB", (width, 60), BG)
             ImageDraw.Draw(chart).text((10, 20), "no k reached by both clusterings", font=figures.font(13), fill=MUTED)
         charts.append(figures.stack([figures.title_strip(width, f"{name}: ARI of every view with {ref}, by k", 14),
                                      chart]))
-    row1, row2 = _side_by_side(heat), _side_by_side(charts)
+    row1, row2, row3 = _side_by_side(heat), _side_by_side(means), _side_by_side(charts)
     items = [(VIEW_COLOURS.get(v, figures.SERIES[0]), v) for v in views if v != ref]
     if info["null"]["moves"]:
         items.append(((200, 200, 200), "shaded: 5-95 % of the spatial null"))
-    body = figures.stack([row1, colour_bar(), row2, figures.legend(items, width=max(row1.width, row2.width))])
+    width = max(row1.width, row2.width, row3.width)
+    body = figures.stack([row1, row2, colour_bar(), row3, figures.legend(items, width=width)])
     n = info["n_tiles"]
     return figures.with_caption(body, title=f"Agreement between feature views - {prefix}, set '{set_name}' ({n} tiles)",
                                 **caption)
@@ -232,10 +266,11 @@ def cluster_map(sample: dict, tiles: pd.DataFrame, colours: list[tuple], width: 
 def maps_figure(sample: dict, result: dict, set_name: str, caption: dict, prefix: str,
                 cell_width: int = 330) -> Image.Image | None:
     info = result["sets"][set_name]
-    views, ref, k = info["views_clustered"], info["reference_view"], info["k_ref"]
+    views, ref = info["views_clustered"], info["reference_view"]
     if not views:
         return None
     method = "leiden" if any(key[1] == "leiden" for key in result["labels"][set_name]) else "kmeans"
+    k = (info.get("k_show") or {}).get(method, info["k_ref"])
     labels = result["labels"][set_name]
     tiles = sample["tiles"][result["masks"][set_name]]
     ref_lab = labels[(ref, method, k)]
@@ -302,11 +337,12 @@ def contingency_panel(lab: np.ndarray, ref_lab: np.ndarray, view: str, ref: str,
 
 def contingency_figure(result: dict, set_name: str, caption: dict, prefix: str) -> Image.Image | None:
     info = result["sets"][set_name]
-    views, ref, k = info["views_clustered"], info["reference_view"], info["k_ref"]
+    views, ref = info["views_clustered"], info["reference_view"]
     others = [v for v in views if v != ref]
     if not others:
         return None
     method = "leiden" if any(key[1] == "leiden" for key in result["labels"][set_name]) else "kmeans"
+    k = (info.get("k_show") or {}).get(method, info["k_ref"])
     labels = result["labels"][set_name]
     panels = [contingency_panel(labels[(v, method, k)], labels[(ref, method, k)], v, ref) for v in others]
     ncols = min(3, len(panels))
@@ -371,9 +407,13 @@ def redundancy_figure(red: dict, caption: dict, prefix: str, set_name: str) -> I
         return None
     views = info["views"]
     M = np.full((len(views), len(views)), np.nan)
+    notes = [["" for _ in views] for _ in views]
     for r in table.itertuples(index=False):
-        M[views.index(r.predictor), views.index(r.target)] = r.r2
-    heat = heatmap(M, views, "R2 of the column view predicted from the row view", cell=58)
+        i, j = views.index(r.predictor), views.index(r.target)
+        M[i, j] = r.r2
+        if np.isfinite(getattr(r, "r2_ci_low", np.nan)):
+            notes[i][j] = f"{r.r2_ci_low:.2f}-{r.r2_ci_high:.2f}"
+    heat = heatmap(M, views, "R2 of the column view predicted from the row view (95 % interval)", notes=notes, cell=64)
     series = []
     for a, b in info.get("map_pairs", []):
         rows = pcs[(pcs["predictor"] == a) & (pcs["target"] == b)].sort_values("pc")
@@ -419,3 +459,193 @@ def redundancy_maps_figure(sample: dict, tiles: pd.DataFrame, red: dict, caption
     body = figures.stack([grid, colour_bar(label="unexplained", top=top)])
     return figures.with_caption(body, title=f"Where each view has what the other one does not predict - {prefix}",
                                 min_width=1100, **caption)
+
+
+# ---- F1 per domain -----------------------------------------------------------------------------------------------
+def rect_heatmap(values: np.ndarray, row_labels: list[str], col_labels: list[str], title: str,
+                 cell: int = 54) -> Image.Image:
+    """Matrix of values between 0 and 1 (blue scale, number in each cell)."""
+    f_lab, f_val, f_title = figures.font(12), figures.font(13), figures.font(14)
+    probe = ImageDraw.Draw(Image.new("RGB", (1, 1)))
+    lw = int(max(text_width(probe, plain(s), f_lab) for s in row_labels)) + 14
+    th = int(max(text_width(probe, plain(s), f_lab) for s in col_labels)) + 10
+    top = 28 + th
+    W = max(lw + len(col_labels) * cell + 12, int(text_width(probe, plain(title), f_title)) + 16)
+    H = top + len(row_labels) * cell + 8
+    img = Image.new("RGB", (W, H), BG)
+    draw = ImageDraw.Draw(img)
+    draw.text((6, 4), plain(title), font=f_title, fill=INK)
+    for j, s in enumerate(col_labels):
+        v = vertical_text(s, f_lab)
+        img.paste(v, (lw + j * cell + (cell - v.width) // 2, top - v.height - 4))
+    for i, s in enumerate(row_labels):
+        draw.text((lw - 6 - text_width(draw, plain(s), f_lab), top + i * cell + cell / 2 - 8), plain(s), font=f_lab,
+                  fill=INK)
+        for j in range(len(col_labels)):
+            v = values[i, j]
+            x, y = lw + j * cell, top + i * cell
+            draw.rectangle([x, y, x + cell - 3, y + cell - 3], fill=scale_colour(v))
+            if np.isfinite(v):
+                _centred(draw, x, y, cell - 3, cell - 3, f"{v:.2f}", f_val, (255, 255, 255) if v > 0.55 else INK)
+    return img
+
+
+def f1_figure(f1: pd.DataFrame, info: dict, set_name: str, methods: list[str], caption: dict,
+              prefix: str) -> Image.Image | None:
+    """Per method: F1 of every domain of the reference view for every other view at the k
+    shown, and the macro-F1 (mean over domains) of every view by k."""
+    if f1.empty:
+        return None
+    ref = info["reference_view"]
+    views = [v for v in info["views_clustered"] if v != ref]
+    t = f1[(f1["set"] == set_name) & f1["view"].isin(views)]
+    if t.empty:
+        return None
+    heat, charts = [], []
+    for m in methods:
+        k = (info.get("k_show") or {}).get(m, info["k_ref"])
+        name = "Leiden" if m == "leiden" else "k-means"
+        tk = t[(t["method"] == m) & (t["k"] == k)]
+        if tk.empty:
+            continue
+        domains = sorted(tk["domain"].unique())
+        sizes = tk.groupby("domain")["n_domain"].first()
+        M = np.full((len(domains), len(views)), np.nan)
+        for r in tk.itertuples(index=False):
+            M[domains.index(r.domain), views.index(r.view)] = r.f1
+        rows = [f"{ref} {d} ({int(sizes[d])})" for d in domains]
+        heat.append(rect_heatmap(M, rows, views, f"{name}, k = {k}: F1 of every {ref} domain"))
+        mac = cluster.macro_f1(t[t["method"] == m])
+        series = []
+        for v in views:
+            mv = mac[mac["view"] == v].sort_values("k")
+            if len(mv):
+                series.append({"name": v, "x": mv["k"].to_numpy(float), "y": mv["macro_f1"].to_numpy(float),
+                               "colour": VIEW_COLOURS.get(v, figures.SERIES[len(series) % len(figures.SERIES)])})
+        width = max(heat[-1].width, 460)
+        chart = figures.line_chart(series, "k (number of clusters)", "macro-F1 (mean over domains)", size=(width, 300),
+                                   y_range=(0.0, 1.0), x_ticks=info["k"], v_lines=[(k, f"k shown = {k}")])
+        charts.append(figures.stack([figures.title_strip(width, f"{name}: macro-F1 of every view, by k", 14), chart]))
+    if not heat:
+        return None
+    items = [(VIEW_COLOURS.get(v, figures.SERIES[0]), v) for v in views]
+    row1, row2 = _side_by_side(heat), _side_by_side(charts)
+    body = figures.stack([row1, colour_bar(label="F1"), row2, figures.legend(items, width=max(row1.width, row2.width))])
+    return figures.with_caption(body, title=f"Which {ref} domains each view finds (F1) - {prefix}, set '{set_name}'",
+                                **caption)
+
+
+# ---- stability under subsampling -------------------------------------------------------------------------------------
+def stability_figure(summary: pd.DataFrame, info: dict, set_name: str, methods: list[str], caption: dict,
+                     prefix: str) -> Image.Image | None:
+    """Per method: the ARI of every view with the reference view on subsamples (mean, band =
+    mean +- standard deviation), and the ARI of every view's subsample clustering with its
+    clustering of all tiles."""
+    if summary.empty:
+        return None
+    ref = info["reference_view"]
+    views = info["views_clustered"]
+    t = summary[summary["set"] == set_name]
+    panels = []
+    for m in methods:
+        name = "Leiden" if m == "leiden" else "k-means"
+        k = (info.get("k_show") or {}).get(m, info["k_ref"])
+        tm = t[t["method"] == m]
+        out = []
+        for col, label, keep in (("ari_with_reference", f"ARI with {ref} (subsamples)", [v for v in views if v != ref]),
+                                 ("ari_with_full", "ARI with the clustering of all tiles", views)):
+            series = []
+            for v in keep:
+                r = tm[tm["view"] == v].sort_values("k")
+                if not len(r) or r[f"{col}_mean"].isna().all():
+                    continue
+                y = r[f"{col}_mean"].to_numpy(float)
+                sd = np.nan_to_num(r[f"{col}_sd"].to_numpy(float))
+                series.append({"name": v, "x": r["k"].to_numpy(float), "y": y, "lo": np.clip(y - sd, -0.25, 1),
+                               "hi": np.clip(y + sd, -0.25, 1),
+                               "colour": VIEW_COLOURS.get(v, figures.SERIES[len(series) % len(figures.SERIES)])})
+            if series:
+                chart = figures.line_chart(series, "k (number of clusters)", label, size=(520, 300),
+                                           y_range=(0.0, 1.0), x_ticks=info["k"], v_lines=[(k, f"k shown = {k}")])
+                out.append(figures.stack([figures.title_strip(520, f"{name}: {label}", 14), chart]))
+        if out:
+            panels.append(_side_by_side(out))
+    if not panels:
+        return None
+    items = [(VIEW_COLOURS.get(v, figures.SERIES[0]), v) for v in views]
+    body = figures.stack(panels + [figures.legend(items, width=max(p.width for p in panels))])
+    return figures.with_caption(body, title=f"How stable the clusterings are - {prefix}, set '{set_name}'", **caption)
+
+
+# ---- relevance (--relevance) -----------------------------------------------------------------------------------------
+def relevance_figure(rel: dict, caption: dict, prefix: str, set_name: str = "keep") -> Image.Image | None:
+    """a: R^2 of the expression's components from every image view (95 % interval, spatial
+    null). b: for pairs of views, what each adds to the other and what they share."""
+    table, part = rel.get("table"), rel.get("partition")
+    if table is None or table.empty:
+        return None
+    views = table[table["kind"] == "view"]
+    rows = []
+    for r in views.itertuples(index=False):
+        rows.append({"label": r.predictor, "segments": [(r.r2, VIEW_COLOURS.get(r.predictor, figures.SERIES[0]))],
+                     "lo": r.r2_ci_low, "hi": r.r2_ci_high, "marker": r.r2_null_p95, "text": f"{r.r2:.2f}"})
+    lo = min(0.0, float(np.nanmin(views["r2"])) - 0.05)
+    a = figures.hbar_chart(rows, "R2 of the expression's components", x_range=(max(lo, -0.25), 1.0), width=640)
+    parts = [figures.stack([figures.title_strip(640, "a. Expression predicted from every image view", 14), a])]
+    if part is not None and len(part):
+        rows_b = []
+        for r in part.itertuples(index=False):
+            ca = VIEW_COLOURS.get(r.view_a, figures.SERIES[0])
+            cb = VIEW_COLOURS.get(r.view_b, figures.SERIES[1])
+            rows_b.append({"label": f"{r.view_a} + {r.view_b}",
+                           "segments": [(max(r.unique_a, 0.0), ca), (max(r.shared, 0.0), (190, 190, 190)),
+                                        (max(r.unique_b, 0.0), cb)],
+                           "text": f"only A {r.unique_a:.2f}, both {r.shared:.2f}, only B {r.unique_b:.2f}"})
+        b = figures.hbar_chart(rows_b, "R2 of the expression's components, split", x_range=(0.0, 1.0), width=980)
+        items = [((190, 190, 190), "predicted by both A and B"), ((120, 120, 120), "only A: left colour; only B: right colour")]
+        parts.append(figures.stack([figures.title_strip(980, "b. What each view adds to the other (A + B)", 14), b,
+                                    figures.legend(items, width=980)]))
+    body = figures.stack(parts)
+    return figures.with_caption(body, title=(f"How much of the expression the image predicts - {prefix}, set "
+                                             f"'{set_name}' ({rel['info']['n_tiles']} tiles)"), min_width=1000,
+                                **caption)
+
+
+def relevance_genes_figure(rel: dict, caption: dict, prefix: str, x_view: str = "UNI2H_RGB", y_view: str = "LBP_RGB",
+                           n_labels: int = 12) -> Image.Image | None:
+    """a: every gene's R^2 from two views (coloured where the spatial null is beaten). b: the
+    genes the second view predicts best, with the first view's R^2 marked."""
+    g = rel.get("genes")
+    if g is None or f"r2_{x_view}" not in g or f"r2_{y_view}" not in g:
+        return None
+    x, y = g[f"r2_{x_view}"].to_numpy(float), g[f"r2_{y_view}"].to_numpy(float)
+    qy = g.get(f"q_{y_view}", pd.Series(np.nan, index=g.index)).to_numpy(float)
+    qx = g.get(f"q_{x_view}", pd.Series(np.nan, index=g.index)).to_numpy(float)
+    grey, cy, cx = (205, 205, 205), VIEW_COLOURS.get(y_view, (213, 94, 0)), VIEW_COLOURS.get(x_view, (0, 114, 178))
+    colours = [cy if qy[i] < 0.05 else (cx if qx[i] < 0.05 else grey) for i in range(len(g))]
+    names = g["gene_name"].astype(str).to_numpy()
+    top_y = list(np.argsort(-np.nan_to_num(y, nan=-9))[:n_labels])
+    adds = g.get(f"adds_{y_view}_to_{x_view}")
+    top_add = list(np.argsort(-np.nan_to_num(adds.to_numpy(float), nan=-9))[:n_labels // 2]) if adds is not None else []
+    labels = [(int(i), names[i]) for i in dict.fromkeys(top_y + top_add)]
+    hi = float(np.nanmax(np.r_[x, y, 0.1]))
+    lo = max(-0.2, float(np.nanmin(np.r_[x, y, 0.0])))
+    a = figures.scatter_chart(x, y, colours, f"R2 of the gene from {x_view}", f"R2 of the gene from {y_view}",
+                              size=(620, 560), x_range=(lo, hi + 0.05), y_range=(lo, hi + 0.05), labels=labels)
+    items = [(cy, f"beats the spatial null from {y_view} (q < 0.05)"),
+             (cx, f"beats it only from {x_view}"), (grey, "neither")]
+    left = figures.stack([figures.title_strip(620, f"a. Every gene: from {x_view} and from {y_view}", 14), a,
+                          figures.legend(items, width=620)])
+    rows = []
+    for i in top_y[:15]:
+        t = f"{x_view} {x[i]:.2f}"
+        if "r2_INTENSITY_HE" in g:
+            t += f" | INTENSITY_HE {g['r2_INTENSITY_HE'].iloc[i]:.2f}"
+        rows.append({"label": names[i], "segments": [(y[i], cy)], "marker": x[i], "text": t})
+    top_x = float(np.ceil(max(hi, 0.2) * 10) / 10)
+    b = figures.hbar_chart(rows, f"R2 from {y_view} (black tick: from {x_view})", x_range=(min(0.0, lo), top_x),
+                           width=760)
+    right = figures.stack([figures.title_strip(640, f"b. Genes best predicted from {y_view}", 14), b])
+    body = _side_by_side([left, right])
+    return figures.with_caption(body, title=f"Which genes the image predicts - {prefix}, set 'keep' ({len(g)} genes)",
+                                min_width=1200, **caption)

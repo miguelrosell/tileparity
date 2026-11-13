@@ -101,6 +101,12 @@ def validateParams() {
     if (params.redundancy && !params.cluster) {
         error("--redundancy runs inside the clustering step: add --cluster")
     }
+    if (params.relevance && !params.cluster) {
+        error("--relevance runs inside the clustering step: add --cluster")
+    }
+    if (params.patch_sweep) {
+        validatePatchSweep()
+    }
     if (params.skip_uni2h && params.skip_lbp) {
         log.warn("--skip_uni2h and --skip_lbp are both set: only tiles and expression per tile will be produced")
     }
@@ -119,7 +125,15 @@ def validateCluster() {
     if (!ks || ks.any { v -> !(v ==~ /[0-9]+/) || (v as Integer) < 2 }) {
         error("--cluster_k '${params.cluster_k}': use a comma-separated list of whole numbers of at least 2, e.g. '4,8,12'")
     }
-    wholeParam('cluster_k_ref', params.cluster_k_ref, 2)
+    if (params.cluster_k_ref.toString() != 'auto') {
+        wholeParam('cluster_k_ref', params.cluster_k_ref, 2)
+    }
+    wholeParam('cluster_stability_reps', params.cluster_stability_reps, 0)
+    def frac = params.cluster_stability_fraction.toString()
+    if (!(frac ==~ /[0-9]*\.?[0-9]+/) || (frac as Double) <= 0 || (frac as Double) >= 1) {
+        error("--cluster_stability_fraction '${params.cluster_stability_fraction}' must be a share of the tiles, between 0 and 1")
+    }
+    wholeParam('cluster_gallery_n', params.cluster_gallery_n, 1)
     wholeParam('cluster_n_pcs', params.cluster_n_pcs, 1)
     wholeParam('cluster_n_neighbors', params.cluster_n_neighbors, 2)
     wholeParam('cluster_n_hvg', params.cluster_n_hvg, 10)
@@ -129,13 +143,25 @@ def validateCluster() {
     if (!(floor ==~ /[0-9]*\.?[0-9]+/) || (floor as Double) > 1) {
         error("--cluster_min_counts '${params.cluster_min_counts}' must be between 0 and 1 (a fraction of the keep tiles' median)")
     }
-    if (!((params.cluster_k_ref as Integer) in ks.collect { v -> v as Integer })) {
+    if (params.cluster_k_ref.toString() != 'auto' && !((params.cluster_k_ref as Integer) in ks.collect { v -> v as Integer })) {
         log.warn("--cluster_k_ref ${params.cluster_k_ref} is not in --cluster_k '${params.cluster_k}': the figures use the closest k below it")
     }
     listParam('cluster_lbp_recipes', params.cluster_lbp_recipes, ['hellinger', 'scanpy', 'zscore'])
     def hvf = params.cluster_lbp_hvf.toString()
     if (!(hvf ==~ /[0-9]*\.?[0-9]+/) || (hvf as Double) <= 0 || (hvf as Double) > 1) {
         error("--cluster_lbp_hvf '${params.cluster_lbp_hvf}' must be a share of the LBP bins, above 0 and at most 1")
+    }
+    if (params.redundancy || params.relevance) {
+        wholeParam('redundancy_null_shifts', params.redundancy_null_shifts, 0)
+        wholeParam('redundancy_bootstrap', params.redundancy_bootstrap, 0)
+    }
+    if (params.relevance) {
+        if (params.relevance_gene_views.toString().toLowerCase() != 'none') {
+            listParam('relevance_gene_views', params.relevance_gene_views,
+                      ['UNI2H_RGB', 'UNI2H_RGB_HE', 'LBP_RGB', 'LBP_RGB_HE', 'LBP_HE', 'LBP_H', 'LBP_E', 'INTENSITY_HE'])
+        }
+        wholeParam('relevance_gene_null_shifts', params.relevance_gene_null_shifts, 0)
+        wholeParam('redundancy_folds', params.redundancy_folds, 2)
     }
     if (params.redundancy) {
         if (params.redundancy_views.toString() != 'images') {
@@ -149,6 +175,35 @@ def validateCluster() {
             error("--redundancy_block_um '${params.redundancy_block_um}' must be a positive number of micrometres")
         }
     }
+}
+
+def validatePatchSweep() {
+    def sizes = params.patch_sweep_sizes_um.toString()
+    if (!(sizes ==~ /[0-9]+:[0-9]+:[0-9]+/ || sizes ==~ /[0-9]+(,[0-9]+)*/)) {
+        error("--patch_sweep_sizes_um '${sizes}': use start:end:step or a comma list of whole micrometres, e.g. '16:224:8'")
+    }
+    wholeParam('patch_sweep_cell_um', params.patch_sweep_cell_um, 2)
+    wholeParam('patch_sweep_max_radius', params.patch_sweep_max_radius, 1)
+    if (!(params.patch_sweep_channels.toString() in ['rgb', 'rgb_he', 'he', 'h', 'e'])) {
+        error("--patch_sweep_channels must be one input set: rgb, rgb_he, he, h or e")
+    }
+    def ks = (params.patch_sweep_k ?: '').toString().tokenize(',')*.trim().findAll { v -> v }
+    if (ks.any { v -> !(v ==~ /[0-9]+/) || (v as Integer) < 2 }) {
+        error("--patch_sweep_k '${params.patch_sweep_k}': a comma list of whole numbers of at least 2")
+    }
+}
+
+// The sample metadata of one scale as a TSV (for the cohort summary): sample, then every
+// metadata column of the samplesheet
+def samplesTsv(metas) {
+    def keys = metas.collectMany { m -> ((m.metadata ?: [:]) as Map).keySet() as List }.unique()
+    def lines = [(['sample'] + keys).join('\t')]
+    metas.each { m -> lines << ([m.sample] + keys.collect { k -> tsvCell(((m.metadata ?: [:]) as Map).get(k)) }).join('\t') }
+    return lines.join('\n')
+}
+
+def tsvCell(v) {
+    return (v == null ? '' : v.toString()).replaceAll(/[\t\r\n]/, ' ')
 }
 
 // A comma-separated subset of `allowed` (or 'all' when allowed)
@@ -292,8 +347,11 @@ def summaryText(int nSamples, List scales) {
     extractors  : ${[params.skip_uni2h ? null : "UNI2-h (${params.uni2h_inputs})" + (params.uni2h_test_mode ? ' [TEST MODE]' : ''), params.skip_lbp ? null : "fastLBP (${params.lbp_channels}${params.lbp_center ? ', + centre' : ''})"].findAll().join(', ')}
     stains      : H and E vectors ${params.stain_vectors == 'slide' ? 'estimated on each slide (Macenko)' : 'standard (Ruifrok & Johnston)'}
     exports     : ${[params.skip_spe ? null : 'SpatialExperiment', params.skip_anndata ? null : 'AnnData', params.qc_umap ? '3-D UMAP QC' : null].findAll().join(', ')}
-    clustering  : ${params.cluster ? "per slide, ${params.cluster_methods} at k = ${params.cluster_k} (figures at k = ${params.cluster_k_ref}), sets ${params.cluster_sets}${params.cluster_lbp_recipes.toString() != 'hellinger' ? ", LBP prepared as ${params.cluster_lbp_recipes}" : ''}" : 'off (--cluster)'}
+    clustering  : ${params.cluster ? "per slide, ${params.cluster_methods} at k = ${params.cluster_k} (figures at k = ${params.cluster_k_ref}; stability: ${params.cluster_stability_reps} subsamples), sets ${params.cluster_sets}${params.cluster_lbp_recipes.toString() != 'hellinger' ? ", LBP prepared as ${params.cluster_lbp_recipes}" : ''}" : 'off (--cluster)'}
     redundancy  : ${params.redundancy ? "${params.redundancy_views.toString() == 'images' ? 'the image' : params.redundancy_views} views, ${params.redundancy_folds} folds of blocks of ${params.redundancy_block_um} um" : 'off (--redundancy)'}
+    relevance   : ${params.relevance ? "expression from every image view, genes from ${params.relevance_gene_views}" : 'off (--relevance)'}
+    cohort      : ${params.cluster && params.cohort_summary ? "summary per scale, groups '${params.cohort_group}', unit '${params.cohort_pair}'" : 'off'}${params.cluster && params.cluster_gallery ? '; tile galleries' : ''}
+    patch sweep : ${params.patch_sweep ? "LBP (${params.patch_sweep_channels}, radii <= ${params.patch_sweep_max_radius} px) on patches of ${params.patch_sweep_sizes_um} um, Visium HD slides" : 'off (--patch_sweep)'}
     gpu         : ${params.use_gpu}
     outdir      : ${params.outdir}
     --------------------------------------------------

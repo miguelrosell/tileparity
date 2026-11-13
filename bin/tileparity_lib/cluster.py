@@ -486,10 +486,20 @@ def reference_view(views: list[str]) -> str | None:
 
 # ---- one slide ----------------------------------------------------------------------------------------
 AGREEMENT_COLUMNS = ["set", "method", "k", "view_a", "view_b", "n_tiles", "k_a", "k_b", "ari", "nmi",
-                     "null_moves", "null_ari_mean", "null_ari_p05", "null_ari_p50", "null_ari_p95", "p_null"]
+                     "null_moves", "null_ari_mean", "null_ari_p05", "null_ari_p50", "null_ari_p95", "p_null",
+                     "ari_corrected"]
 
 
-def run(sample: dict, views=VIEWS, ks=DEFAULT_K, k_ref: int = 8, methods=METHODS, sets=SETS, n_pcs: int = 50,
+def corrected_ari(ari_value: float, null_mean: float) -> float:
+    """ARI corrected for the spatial null: (ARI - null mean) / (1 - null mean), i.e. the share
+    of the way from what two unrelated maps with the same patchiness reach (0) to identical
+    partitions (1). NaN without a null."""
+    if not (np.isfinite(ari_value) and np.isfinite(null_mean)) or null_mean >= 1:
+        return float("nan")
+    return float((ari_value - null_mean) / (1 - null_mean))
+
+
+def run(sample: dict, views=VIEWS, ks=DEFAULT_K, k_ref="auto", methods=METHODS, sets=SETS, n_pcs: int = 50,
         n_neighbors: int = 15, n_hvg: int = 2000, min_counts_ratio: float = 0.1, null_shifts: int = 100,
         seed: int = 0, lbp_recipes=("hellinger",), lbp_hvf: float = 0.3, log=None) -> dict:
     """Cluster every view of one sample in every tile set and measure the agreement.
@@ -500,7 +510,10 @@ def run(sample: dict, views=VIEWS, ks=DEFAULT_K, k_ref: int = 8, methods=METHODS
     keep}}, "agreement": DataFrame}. ``info`` records the definition and size of the set,
     the k used, the reference view and, per view, the features, PCs and Leiden resolutions.
     ``info["views_clustered"]`` lists the views with the default preparation;
-    ``info["recipe_views_clustered"]`` the LBP views prepared with an alternative recipe."""
+    ``info["recipe_views_clustered"]`` the LBP views prepared with an alternative recipe.
+    ``info["k_show"]`` is the k of the heatmaps, maps and contingency tables for every
+    method: ``k_ref`` when it is a number (the nearest usable k), else (``"auto"``) the k at
+    which the image views agree best with the reference view (:func:`choose_k`)."""
     masks, set_info = tile_sets(sample, min_counts_ratio)
     tiles = sample["tiles"]
     ks = sorted({int(k) for k in ks if int(k) >= 2})
@@ -525,7 +538,9 @@ def run(sample: dict, views=VIEWS, ks=DEFAULT_K, k_ref: int = 8, methods=METHODS
                 log.info("%s: %s", s, info["status"])
             continue
         info["k"] = usable
-        info["k_ref"] = k_ref if k_ref in usable else max([k for k in usable if k <= k_ref] or [min(usable)])
+        fixed = None if str(k_ref).lower() == "auto" else int(k_ref)
+        if fixed is not None:
+            fixed = fixed if fixed in usable else max([k for k in usable if k <= fixed] or [min(usable)])
         info["views"] = {}
         labels: dict = {}
         scores: dict = {}
@@ -579,6 +594,17 @@ def run(sample: dict, views=VIEWS, ks=DEFAULT_K, k_ref: int = 8, methods=METHODS
             for k in usable:
                 for v in everything:
                     rows.append(_row(s, METHOD_PAIR, k, v, v, labels[(v, "leiden", k)], labels[(v, "kmeans", k)], []))
+        set_rows = pd.DataFrame([r for r in rows if r["set"] == s], columns=AGREEMENT_COLUMNS)
+        info["k_show"], info["k_choice"] = {}, {}
+        for m in methods:
+            choice = choose_k(set_rows, m, done, info["reference_view"], usable)
+            info["k_choice"][m] = choice
+            info["k_show"][m] = fixed if fixed is not None else choice["k"]
+        info["k_show_rule"] = (f"fixed: k = {fixed} (--cluster_k_ref)" if fixed is not None else
+                               "auto: the k with the highest mean corrected ARI of the image views with "
+                               f"{info['reference_view']} (raw ARI where there is no spatial null); ties go to the "
+                               "smaller k")
+        info["k_ref"] = info["k_show"][methods[0]]  # kept for older readers of cluster.json
         info["status"] = "clustered"
         out["sets"][s] = info
         out["labels"][s] = labels
@@ -598,6 +624,7 @@ def _row(s, method, k, a, b, la, lb, pairs) -> dict:
         row.update(null_ari_mean=float(null.mean()), null_ari_p05=float(np.percentile(null, 5)),
                    null_ari_p50=float(np.percentile(null, 50)), null_ari_p95=float(np.percentile(null, 95)),
                    p_null=float((1 + (null >= row["ari"]).sum()) / (1 + len(null))))
+        row["ari_corrected"] = corrected_ari(row["ari"], row["null_ari_mean"])
     return row
 
 
@@ -633,3 +660,230 @@ def export_columns(table: pd.DataFrame) -> dict:
         if c.startswith("keep_") and "_leiden_k" in c:
             out[EXPORT_PREFIX + c[len("keep_"):]] = table[c]
     return out
+
+
+# ---- which k to show, averages over k ----------------------------------------------------------------------
+def _same_k(t: pd.DataFrame) -> pd.DataFrame:
+    """Rows whose two partitions both reached k clusters."""
+    return t[(t["k_a"] == t["k"]) & (t["k_b"] == t["k"])]
+
+
+def choose_k(rows: pd.DataFrame, method: str, views: list[str], ref: str | None, usable: list[int]) -> dict:
+    """The k at which the image views agree best with the reference view, for one method.
+
+    Score of a k = mean, over the views other than ``ref`` (default preparations only), of
+    their corrected ARI with ``ref`` (the raw ARI where there is no spatial null). Without a
+    reference, or with a single view, the mean over every pair of views. Ties go to the
+    smaller k. Returns {"k", "score": {k: score}, "basis": "corrected"|"raw"}."""
+    t = _same_k(rows[(rows["method"] == method) & rows["view_a"].isin(views) & rows["view_b"].isin(views)])
+    others = [v for v in views if v != ref]
+    if ref in views and others:
+        t = t[((t["view_a"] == ref) & t["view_b"].isin(others)) | ((t["view_b"] == ref) & t["view_a"].isin(others))]
+    corrected = "ari_corrected" in t and t["ari_corrected"].notna().any()
+    col = "ari_corrected" if corrected else "ari"
+    score = {int(k): float(g[col].mean()) for k, g in t.groupby("k") if g[col].notna().any()}
+    if not score:
+        return {"k": int(min(usable)), "score": {}, "basis": "none"}
+    best = max(score.values())
+    k = min(kk for kk, v in score.items() if v >= best - 1e-12)
+    return {"k": int(k), "score": {str(kk): round(v, 6) for kk, v in sorted(score.items())},
+            "basis": "corrected" if corrected else "raw"}
+
+
+SUMMARY_COLUMNS = ["set", "method", "view_a", "view_b", "n_k", "ari_mean_k", "ari_corrected_mean_k", "k_show",
+                   "ari_k_show", "ari_corrected_k_show", "null_ari_p95_k_show", "above_null_k_show"]
+
+
+def summary_table(agreement: pd.DataFrame, sets_info: dict) -> pd.DataFrame:
+    """One row per set, method and pair of views: the ARI averaged over every k that both
+    partitions reached (raw and corrected), and the values at the k shown in the figures."""
+    rows = []
+    t = _same_k(agreement[agreement["method"] != METHOD_PAIR])
+    for (s, m, a, b), g in t.groupby(["set", "method", "view_a", "view_b"], sort=False):
+        k_show = (sets_info.get(s, {}).get("k_show") or {}).get(m)
+        at = g[g["k"] == k_show]
+        r = at.iloc[0] if len(at) else None
+        p95 = float(r["null_ari_p95"]) if r is not None and pd.notna(r["null_ari_p95"]) else float("nan")
+        rows.append({"set": s, "method": m, "view_a": a, "view_b": b, "n_k": int(len(g)),
+                     "ari_mean_k": float(g["ari"].mean()),
+                     "ari_corrected_mean_k": float(g["ari_corrected"].mean()) if g["ari_corrected"].notna().any()
+                     else float("nan"),
+                     "k_show": k_show, "ari_k_show": float(r["ari"]) if r is not None else float("nan"),
+                     "ari_corrected_k_show": float(r["ari_corrected"]) if r is not None and pd.notna(r["ari_corrected"])
+                     else float("nan"),
+                     "null_ari_p95_k_show": p95,
+                     "above_null_k_show": (bool(r["ari"] > p95) if r is not None and np.isfinite(p95) else pd.NA)})
+    return pd.DataFrame(rows, columns=SUMMARY_COLUMNS)
+
+
+# ---- F1 per domain -------------------------------------------------------------------------------------------
+F1_COLUMNS = ["set", "method", "k", "view", "reference", "domain", "n_domain", "matched_cluster", "n_cluster", "n_both",
+              "precision", "recall", "f1"]
+
+
+def domain_f1(ref_lab: np.ndarray, lab: np.ndarray) -> pd.DataFrame:
+    """For every cluster of the reference partition (a domain): the cluster of ``lab`` matched
+    to it one-to-one so that the summed F1 is largest (Hungarian algorithm), and precision =
+    shared / cluster size, recall = shared / domain size, F1 = 2 shared / (domain + cluster).
+    A domain left without a partner (more domains than clusters) has F1 = 0."""
+    from scipy.optimize import linear_sum_assignment
+
+    M = contingency(ref_lab, lab)  # domains x clusters
+    nd, nc = M.sum(axis=1), M.sum(axis=0)
+    F = 2 * M / np.maximum(nd[:, None] + nc[None, :], 1)
+    r, c = linear_sum_assignment(-F)
+    match = dict(zip(r.tolist(), c.tolist()))
+    rows = []
+    for d in range(M.shape[0]):
+        j = match.get(d)
+        both = int(M[d, j]) if j is not None else 0
+        ncl = int(nc[j]) if j is not None else 0
+        rows.append({"domain": d, "n_domain": int(nd[d]), "matched_cluster": j if j is not None else pd.NA,
+                     "n_cluster": ncl, "n_both": both, "precision": both / ncl if ncl else 0.0,
+                     "recall": both / nd[d] if nd[d] else 0.0, "f1": float(F[d, j]) if j is not None else 0.0})
+    return pd.DataFrame(rows)
+
+
+def f1_table(result: dict) -> pd.DataFrame:
+    """F1 of every domain of the reference view (EXPRESSION when computed) for every other
+    clustered view, method and k (same method and k for both partitions)."""
+    parts = []
+    for s, info in result["sets"].items():
+        if info.get("status") != "clustered" or not info.get("reference_view"):
+            continue
+        ref = info["reference_view"]
+        views = [v for v in info["views_clustered"] + info.get("recipe_views_clustered", []) if v != ref]
+        labels = result["labels"][s]
+        for (v, m, k), lab in labels.items():
+            if v not in views or (ref, m, k) not in labels:
+                continue
+            ref_lab = labels[(ref, m, k)]
+            if n_clusters(ref_lab) != k or n_clusters(lab) != k:
+                continue
+            d = domain_f1(ref_lab, lab)
+            d.insert(0, "reference", ref)
+            d.insert(0, "view", v)
+            d.insert(0, "k", k)
+            d.insert(0, "method", m)
+            d.insert(0, "set", s)
+            parts.append(d)
+    return pd.concat(parts, ignore_index=True)[F1_COLUMNS] if parts else pd.DataFrame(columns=F1_COLUMNS)
+
+
+def macro_f1(f1: pd.DataFrame) -> pd.DataFrame:
+    """Mean F1 over the domains (every domain weighs the same), per set, method, k and view."""
+    if f1.empty:
+        return pd.DataFrame(columns=["set", "method", "k", "view", "macro_f1", "n_domains"])
+    g = f1.groupby(["set", "method", "k", "view"], sort=False)
+    return g["f1"].agg(macro_f1="mean", n_domains="size").reset_index()
+
+
+# ---- stability under subsampling ---------------------------------------------------------------------------------
+STABILITY_COLUMNS = ["set", "method", "k", "view", "rep", "n_tiles", "k_reached", "ari_with_reference", "ari_with_full"]
+
+
+def stability(result: dict, set_name: str, methods, reps: int = 5, fraction: float = 0.9, n_neighbors: int = 15,
+              seed: int = 0, log=None) -> pd.DataFrame:
+    """How much the clusterings change when the input changes a little: ``reps`` times, a
+    random ``fraction`` of the set's tiles is clustered again (same principal components,
+    new nearest-neighbour graph, another seed) with every method and k. For every view:
+    the ARI with the reference view clustered on the same subsample (how stable its
+    agreement with expression is) and the ARI with the view's own clustering of all tiles,
+    restricted to the subsample (how reproducible its clusters are)."""
+    info = result["sets"].get(set_name, {})
+    if info.get("status") != "clustered" or reps <= 0:
+        return pd.DataFrame(columns=STABILITY_COLUMNS)
+    views, ref, ks = info["views_clustered"], info["reference_view"], info["k"]
+    scores, labels = result["scores"][set_name], result["labels"][set_name]
+    n = next(iter(scores.values())).shape[0]
+    m_sub = max(2, int(round(fraction * n)))
+    rows = []
+    for rep in range(1, reps + 1):
+        rng = np.random.default_rng(seed + 1000 + rep)
+        idx = np.sort(rng.choice(n, size=m_sub, replace=False))
+        usable = [k for k in ks if 2 * k <= m_sub]
+        sub_labels = {}
+        for v in views:
+            P = scores[v][idx]
+            if P.shape[1] == 0:
+                continue
+            if "leiden" in methods:
+                graph = knn_graph(P, n_neighbors, seed + rep)
+                cache: dict = {}
+                for k in usable:
+                    sub_labels[(v, "leiden", k)] = leiden_k(graph, k, seed + rep, cache=cache)[0]
+            if "kmeans" in methods:
+                for k in usable:
+                    sub_labels[(v, "kmeans", k)] = kmeans(P, k, seed + rep)
+        for (v, m, k), lab in sub_labels.items():
+            ref_lab = sub_labels.get((ref, m, k))
+            full = labels.get((v, m, k))
+            rows.append({"set": set_name, "method": m, "k": k, "view": v, "rep": rep, "n_tiles": int(m_sub),
+                         "k_reached": n_clusters(lab),
+                         "ari_with_reference": (ari(lab, ref_lab) if (ref_lab is not None and v != ref and
+                                                                      n_clusters(lab) == k and n_clusters(ref_lab) == k)
+                                                else float("nan")),
+                         "ari_with_full": ari(lab, full[idx]) if full is not None else float("nan")})
+        if log:
+            log.info("%s: stability subsample %d of %d (%d tiles)", set_name, rep, reps, m_sub)
+    return pd.DataFrame(rows, columns=STABILITY_COLUMNS)
+
+
+def stability_summary(stab: pd.DataFrame) -> pd.DataFrame:
+    """Mean and standard deviation over the subsamples, per set, method, k and view."""
+    if stab.empty:
+        return pd.DataFrame(columns=["set", "method", "k", "view", "reps", "ari_with_reference_mean",
+                                     "ari_with_reference_sd", "ari_with_full_mean", "ari_with_full_sd"])
+    g = stab.groupby(["set", "method", "k", "view"], sort=False)
+    return g.agg(reps=("rep", "size"), ari_with_reference_mean=("ari_with_reference", "mean"),
+                 ari_with_reference_sd=("ari_with_reference", "std"), ari_with_full_mean=("ari_with_full", "mean"),
+                 ari_with_full_sd=("ari_with_full", "std")).reset_index()
+
+
+# ---- representative tiles (for the galleries) ---------------------------------------------------------------------
+REPRESENTATIVE_COLUMNS = ["set", "view", "method", "k", "kind", "group", "group_size", "colour", "rank", "tile_id",
+                          "value"]
+
+
+def representatives(sample: dict, result: dict, set_name: str, n: int = 8, n_pc_extremes: int = 3) -> pd.DataFrame:
+    """Tiles that show what each view groups: for every view and method, at the k shown, the
+    ``n`` tiles of every cluster closest to the cluster's centre in the view's principal
+    components (kind 'cluster'; value = distance), and for the first ``n_pc_extremes``
+    components the ``n`` tiles with the highest and the lowest scores (kinds 'pc_high',
+    'pc_low'; value = score). ``colour``: the reference cluster a cluster is matched to (the
+    colour it has in the cluster maps)."""
+    info = result["sets"].get(set_name, {})
+    if info.get("status") != "clustered" or n <= 0:
+        return pd.DataFrame(columns=REPRESENTATIVE_COLUMNS)
+    ids = sample["tiles"]["tile_id"].astype(str).to_numpy()[result["masks"][set_name]]
+    scores, labels = result["scores"][set_name], result["labels"][set_name]
+    rows = []
+    for v in info["views_clustered"]:
+        P = scores[v]
+        if P.shape[1] == 0:
+            continue
+        for m, k in (info.get("k_show") or {}).items():
+            lab = labels.get((v, m, k))
+            if lab is None:
+                continue
+            ref_lab = labels.get((info.get("reference_view"), m, k))
+            colour_of = ({c: c for c in range(n_clusters(lab))} if (ref_lab is None or v == info.get("reference_view"))
+                         else match_to_reference(ref_lab, lab))
+            for c in range(n_clusters(lab)):
+                members = np.flatnonzero(lab == c)
+                if not len(members):
+                    continue
+                d = np.linalg.norm(P[members] - P[members].mean(axis=0), axis=1)
+                for r, i in enumerate(members[np.argsort(d, kind="stable")][:n]):
+                    rows.append({"set": set_name, "view": v, "method": m, "k": k, "kind": "cluster", "group": c,
+                                 "group_size": int(len(members)), "colour": int(colour_of.get(c, c)), "rank": r + 1,
+                                 "tile_id": ids[i],
+                                 "value": float(np.linalg.norm(P[i] - P[members].mean(axis=0)))})
+        for j in range(min(n_pc_extremes, P.shape[1])):
+            order = np.argsort(P[:, j], kind="stable")
+            for kind, picks in (("pc_high", order[::-1][:n]), ("pc_low", order[:n])):
+                for r, i in enumerate(picks):
+                    rows.append({"set": set_name, "view": v, "method": "", "k": pd.NA, "kind": kind, "group": j + 1,
+                                 "group_size": int(len(P)), "colour": pd.NA, "rank": r + 1, "tile_id": ids[i],
+                                 "value": float(P[i, j])})
+    return pd.DataFrame(rows, columns=REPRESENTATIVE_COLUMNS)

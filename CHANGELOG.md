@@ -1,5 +1,40 @@
 # Changelog
 
+## 0.6.0 (2026-11-13)
+
+What the 0.5.0 run on real slides asked for, and the analyses agreed after it: how much to trust a clustering and an R², which tissues each view finds, what the image predicts of the expression, the patch size of fastLBP, and every slide in one summary. Core outputs unchanged; one default of the clustering figures changed (`--cluster_k_ref auto`).
+
+**Correction: sample A_P1_CRC**
+
+* `assets/cohort_a_10x_urls.tsv` pointed A_P1_CRC to 10x Genomics' unsuffixed dataset `Visium_HD_Human_Colon_Cancer`, which is patient P2's section processed a second time. It now points to `Visium_HD_Human_Colon_Cancer_P1`. Results labelled P1 in the 0.3.0–0.5.0 runs are P2's section; the two processings served as a technical replicate (`docs/decisions.md`).
+
+**Clustering (`--cluster`)**
+
+* Corrected ARI, (ARI − spatial null mean) / (1 − null mean), in `cluster_agreement.tsv`; `cluster_summary.tsv` with the ARI and corrected ARI averaged over k and the values at the k shown.
+* The k of the heatmaps, maps and contingency tables is chosen per method: the k at which the image views agree best with EXPRESSION (`--cluster_k_ref auto`, the new default; a number fixes it as before). The agreement figure adds the ARI averaged over k (with the corrected ARI) and marks the k shown; values not above their null are marked `<= null`.
+* F1 per expression domain (one-to-one matching on F1) and macro-F1: `cluster_f1.tsv`, `cluster_f1_<set>.png`.
+* Stability: every clustering repeated on 5 subsamples of 90 % of the tiles (`--cluster_stability_reps`, `--cluster_stability_fraction`): `cluster_stability.tsv`, `cluster_stability_keep.png`.
+* Tile galleries (`TILEPARITY_GALLERY`, on with `--cluster`, `--cluster_gallery`): for every view, the most typical tiles of every cluster and the tiles at both ends of PCs 1–3 (`gallery/<id>.gallery_<view>.png`, `cluster_representatives.tsv`).
+* Cohort summary (`TILEPARITY_COHORT`, on with `--cluster`, `--cohort_summary`): per scale, a long table of every measured value with the samplesheet metadata, key numbers per slide and view, comparisons between the groups of `--cohort_group` with patients (`--cohort_pair`) as the unit, cohort figures and `report.html` (`cohort/mpp<scale>/`).
+
+**Redundancy (`--redundancy`)**
+
+* R² with a 95 % block-bootstrap interval (`--redundancy_bootstrap`), its spread between folds, and a spatial null (the predicting map moved over the tile grid, `--redundancy_null_shifts`) with `p_null`. The heatmap shows the interval under every value.
+
+**New optional analyses**
+
+* `--relevance` (with `--cluster`): R² of the expression's principal components from every image view, variance partitioning between pairs of views (UNI2-h and LBP, LBP and INTENSITY_HE, UNI2-h and INTENSITY_HE), and every one of the 2 000 most variable genes predicted from UNI2H_RGB, LBP_RGB and INTENSITY_HE with a per-gene spatial null (z, p, Benjamini–Hochberg q): `relevance.tsv`, `relevance_partition.tsv`, `relevance_genes.tsv.gz`, two figures.
+* `--patch_sweep` (Visium HD slides; `TILEPARITY_PATCH_SWEEP`): LBP codes counted once per 8 µm cell and summed into patches of 16 to 224 µm; expression from the 8 µm bins summed the same way; R² of the expression from LBP per size and per radius, a split-half noise ceiling, the share of the reachable and a sweet spot (`patch_sweep/`).
+
+**Data**
+
+* `assets/cohort_c_skin_hest.tsv`: the inflammatory skin cohort of HEST-1k (Schäbitz et al. 2022; psoriasis, atopic dermatitis, lichen planus; lesional and non-lesional skin; patient, disease, lesion and replicate per section). `scripts/hest_download.py --from-tsv` downloads a table of samples and writes their metadata into the samplesheet (leaving out sections with two patients' biopsies and sections coarser than `--max-mpp`).
+
+**Other**
+
+* `docs/rolandgarros.md` sections 13 (colorectal Visium HD with the real P1) and 14 (the skin cohort); `docs/decisions.md` rows 8 (hellinger kept, with the evidence) and 12–15; FAQ entries on the determinism of the ARI, R² without p-values and what UNI2-h's numbers mean.
+* Container images and the library version 0.6.0 (the Python environment is unchanged).
+
 ## 0.5.0 (2026-11-11)
 
 Two questions from the meeting with Mark Robinson and Samuel Gunz: what one image view knows that the other does not (redundancy), and whether the preparation of the LBP histograms is arbitrary (alternative preparations). Defaults unchanged.

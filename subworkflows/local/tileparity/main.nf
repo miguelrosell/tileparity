@@ -9,7 +9,11 @@
 //                              |-- [2b FASTLBP_EXTRACT] (channels) --> Output2b (LBP per channel)
 //                              |-- [1a+2a UNI2H_EMBED] (rgb, rgb_he) -> Output2a (tiles x 1536 per set)
 //                              |-- [3 AGGREGATEST] ------------------> Output3 (genes x tiles)
-//                              |-- [CLUSTER] (optional, per slide) --> clusters of every view, ARI between views
+//                              |-- [CLUSTER] (optional, per slide) --> clusters of every view, ARI between views,
+//                              |      F1, stability; --redundancy, --relevance
+//                              |   |-- [GALLERY] (with CLUSTER) -----> typical tiles of every cluster and component
+//                              |   '-- [COHORT] (with CLUSTER, per scale) -> every slide in one summary
+//                              |-- [PATCH_SWEEP] (optional, HD) -----> LBP and expression on patches of 16-224 um
 //                              |-- [4 EXPORTSPE / EXPORTANNDATA] ----> SpatialExperiment, AnnData
 //                              '-- [QCUMAP] (optional) --------------> 3-D UMAP of every view
 //
@@ -28,6 +32,10 @@ include { TILEPARITY_EXPORTANNDATA } from '../../../modules/local/tileparity/exp
 include { TILEPARITY_EXPORTSPE     } from '../../../modules/local/tileparity/exportspe/main'
 include { TILEPARITY_QCUMAP        } from '../../../modules/local/tileparity/qcumap/main'
 include { TILEPARITY_CLUSTER       } from '../../../modules/local/tileparity/cluster/main'
+include { TILEPARITY_GALLERY       } from '../../../modules/local/tileparity/gallery/main'
+include { TILEPARITY_COHORT        } from '../../../modules/local/tileparity/cohortsummary/main'
+include { TILEPARITY_PATCH_SWEEP   } from '../../../modules/local/tileparity/patchsweep/main'
+include { samplesTsv               } from '../utils_tileparity/main'
 
 workflow TILEPARITY {
     take:
@@ -113,6 +121,19 @@ workflow TILEPARITY {
             [meta, [tiles, json, thumb, prep_lineage, uni, uni_lineage, lbp, lbp_lineage, counts, st_lineage, channels_report].flatten()]
         }
 
+    // ---- optional: patch size of fastLBP (Visium HD slides) ------------------------------------------
+    ch_sweep = channel.empty()
+    if (params.patch_sweep && !params.skip_lbp) {
+        ch_sweep_in = ch_channels
+            .join(ch_tiles)
+            .join(TILEPARITY_PREPARE.out.json)
+            .join(ch_spatial)
+            .filter { meta, _c, _cj, _cl, _t, _j, _s -> meta.spatial_format == 'spaceranger_hd' }
+        TILEPARITY_PATCH_SWEEP(ch_sweep_in)
+        ch_sweep = TILEPARITY_PATCH_SWEEP.out.tables
+        ch_versions = ch_versions.mix(TILEPARITY_PATCH_SWEEP.out.versions.first())
+    }
+
     // ---- optional: clustering of every view, per slide and scale ------------------------------------
     ch_clusters = channel.empty()
     ch_sample_export = ch_sample
@@ -124,6 +145,31 @@ workflow TILEPARITY {
         ch_sample_export = ch_sample
             .join(TILEPARITY_CLUSTER.out.labels)
             .map { meta, files, labels, cluster_lineage -> [meta, files + [labels, cluster_lineage]] }
+
+        // galleries: typical tiles of every cluster and component, cut from Process 1's image
+        if (params.cluster_gallery) {
+            ch_gallery_in = ch_image
+                .join(ch_tiles)
+                .join(ch_lineage)
+                .join(TILEPARITY_CLUSTER.out.representatives)
+                .join(TILEPARITY_CLUSTER.out.agreement.map { meta, _agreement, json -> [meta, json] })
+                .join(TILEPARITY_CLUSTER.out.labels.map { meta, _labels, cluster_lineage -> [meta, cluster_lineage] })
+            TILEPARITY_GALLERY(ch_gallery_in)
+            ch_versions = ch_versions.mix(TILEPARITY_GALLERY.out.versions.first())
+        }
+
+        // one summary per scale with every slide (and the patch sweep when it ran)
+        if (params.cohort_summary) {
+            ch_cohort_in = TILEPARITY_CLUSTER.out.cohort
+                .mix(ch_sweep)
+                .map { meta, files -> [meta.scale_tag, meta, files] }
+                .groupTuple()
+                .map { tag, metas, files ->
+                    [[id: "cohort_mpp${tag}", scale_tag: tag], files.flatten(), samplesTsv(metas.unique { m -> m.id })]
+                }
+            TILEPARITY_COHORT(ch_cohort_in)
+            ch_versions = ch_versions.mix(TILEPARITY_COHORT.out.versions.first())
+        }
     }
 
     // ---- Process 4: export, one task per scale with all samples ------------------------------

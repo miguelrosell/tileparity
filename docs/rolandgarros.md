@@ -3,7 +3,7 @@
 A step-by-step guide for the first run on real data: two samples at one scale (0.5 µm/px, 112 µm tiles), with the mask comparison and the 3-D UMAP QC switched on:
 
 * **ZEN36** — HEST-1k, standard Visium, colorectal cancer (cohort B);
-* **A_P1_CRC** — Visium HD, colorectal cancer, patient P1 (cohort A).
+* **A_P1_CRC** — Visium HD, colorectal cancer, patient P1 (cohort A). Up to tileparity 0.5.0 this row downloaded patient P2's section by mistake (section 13).
 
 Everything — software, downloads and runs — happens on the server; nothing is needed on your laptop except a terminal. rolandgarros has 128 CPUs, 512 GB of RAM, 58 TB of disk and an NVIDIA L4 GPU (24 GB); wimbledon is the login node. rolandgarros is shared with the rest of the group, so the jobs below ask for a quarter of it (32 CPUs, 128 GB).
 
@@ -384,6 +384,151 @@ ls -lh tp_v050.tgz
 
 From a terminal on the laptop: `scp <user>@wimbledon.mls.uzh.ch:tileparity/runs/four_samples/tp_v050.tgz ~/`.
 
+## 13. Colorectal cancer, Visium HD: the real P1, the patch sweep and relevance (tileparity 0.6.0 or later)
+
+Up to 0.5.0 the table of links pointed `A_P1_CRC` to 10x Genomics' unsuffixed dataset, which is patient P2's section processed a second time (`docs/decisions.md`). 0.6.0 points to the real P1. This section downloads it, keeps the old folder under another name, and reruns the four-sample folder of section 12 with the new analyses: P2, P5 and ZEN36 reuse their earlier steps (`-resume`), so only P1 and the analyses run again.
+
+**1. Update the code and check the P1 links** (two lines with `200`):
+
+```bash
+source $HOME/tileparity/env.sh
+git -C $TP/tileparity pull
+git -C $TP/tileparity log -1 --oneline          # "tileparity 0.6.0: ..." or later
+{ printf 'sample\tkind\turl\n'; grep -E '^A_P1_CRC' $TP/tileparity/assets/cohort_a_10x_urls.tsv; } > $TP/data/p1_real_urls.tsv
+cut -f3 $TP/data/p1_real_urls.tsv | tail -n +2 | while read u; do curl -sI "$u" | head -1; done
+```
+
+**2. Keep the old folder under its real name and download P1** (about 25 GB):
+
+```bash
+mv $TP/data/raw/A_P1_CRC $TP/data/raw/A_P2_CRC_unsuffixed      # P2's section, processed a second time
+sbatch --job-name=dl_p1 --time=04:00:00 --output=$TP/data/dl_p1_%j.log \
+    --wrap "bash $TP/tileparity/scripts/download_urls.sh $TP/data/p1_real_urls.tsv $TP/data/raw"
+squeue -u $USER                                                 # wait until it is gone
+ls $TP/data/raw/A_P1_CRC                                        # ..._P1_tissue_image.btf and binned_outputs/
+```
+
+**3. The samplesheet**: the row of A_P1_CRC now points to the real P1 (the old samplesheet is kept).
+
+```bash
+cd $TP/runs/four_samples
+cp samplesheet.csv samplesheet_v050.csv
+python - <<'END'
+import csv, glob, os
+tp = os.environ["TP"]
+rows = list(csv.DictReader(open("samplesheet.csv")))
+for r in rows:
+    if r["sample"] == "A_P1_CRC":
+        r["image"] = glob.glob(f"{tp}/data/raw/A_P1_CRC/*_P1_tissue_image.btf")[0]
+        r["spatial"] = f"{tp}/data/raw/A_P1_CRC/binned_outputs"
+with open("samplesheet.csv", "w", newline="") as fh:
+    out = csv.DictWriter(fh, fieldnames=list(rows[0]))
+    out.writeheader()
+    out.writerows(rows)
+END
+grep A_P1_CRC samplesheet.csv                                   # the image ends in _P1_tissue_image.btf
+```
+
+**4. The job script and the run.** The options of section 12 (without the three LBP preparations, decided in 0.5.0: `docs/decisions.md`), plus `--relevance` and `--patch_sweep`; the clustering now also writes the corrected ARI, F1, stability, galleries and the cohort summary by default. Results go to a new folder, `results_v060`.
+
+```bash
+cat > run_v060.sbatch <<'END'
+#!/bin/bash
+#SBATCH --job-name=tp_crc060
+#SBATCH --cpus-per-task=32
+#SBATCH --mem=128G
+#SBATCH --gres=gpu:1
+#SBATCH --time=24:00:00
+#SBATCH --output=%x_%j.log
+source $HOME/tileparity/env.sh
+cd $SLURM_SUBMIT_DIR
+printf 'executor {\n    cpus = %s\n    memory = "%s MB"\n}\n' "$SLURM_CPUS_PER_TASK" "$SLURM_MEM_PER_NODE" > job.config
+nvidia-smi
+nextflow run $TP/tileparity -profile conda,gpu -c job.config \
+    --input samplesheet.csv --outdir results_v060 -w work \
+    --max_cpus 32 --max_memory '120.GB' --max_time '24.h' \
+    --uni2h_weights $TP/models/uni2h/pytorch_model.bin --uni2h_batch_size 64 \
+    --scales_mpp 0.5 --mask_compare --min_tissue_extract 0.3 --qc_umap \
+    --lbp_channels rgb,rgb_he,he,h,e \
+    --cluster --redundancy --relevance --patch_sweep \
+    -resume
+END
+sbatch run_v060.sbatch
+squeue -u $USER
+tail -f tp_crc060_<job number>.log                 # Ctrl+C stops watching, not the job
+```
+
+The log should list only A_P1_CRC's steps and the analyses as new tasks; P2, P5 and ZEN36's preparation, UNI2-h, fastLBP and expression come from the cache. Roughly 1–2 hours (P1's UNI2-h and fastLBP, the patch sweep of the three Visium HD slides, the clustering of four).
+
+**5. What to look at**: `results_v060/cohort/mpp0.5000/cohort_mpp0.5000.report.html` first (every slide together, every figure explained), then per slide `cluster/` (agreement, F1, stability, redundancy, relevance), `gallery/` and, for the Visium HD slides, `patch_sweep/`.
+
+**6. Package and send**:
+
+```bash
+cd $TP/runs/four_samples
+tar czf tp_v060_crc.tgz --exclude='*.h5' --exclude='*.h5ad' --exclude='*.rds' --exclude='*.tif' \
+    results_v060 tp_crc060_*.log run_v060.sbatch samplesheet.csv
+ls -lh tp_v060_crc.tgz
+```
+
+## 14. Inflammatory skin diseases from HEST-1k (tileparity 0.6.0 or later)
+
+Schäbitz et al., *Nature Communications* 2022: standard Visium sections of psoriasis, atopic dermatitis and lichen planus, of lesional skin and of non-lesional skin of the same patients, two sections per biopsy. HEST-1k holds 59 of them; `assets/cohort_c_skin_hest.tsv` lists them with patient, disease, lesion and replicate (read from HEST's sample descriptions). `hest_download.py` leaves out the 7 sections that carry biopsies of two patients and the 2 coarser than 0.6 µm/px, which leaves 50 sections of 13 patients, 12 of them with both lesional and non-lesional skin (atopic dermatitis 4, lichen planus 5, psoriasis 3).
+
+**1. Download** (access to `MahmoodLab/hest` is the one used for ZEN36):
+
+```bash
+source $HOME/tileparity/env.sh
+export HF_TOKEN=hf_xxx
+git -C $TP/tileparity pull
+python $TP/tileparity/scripts/hest_download.py --from-tsv $TP/tileparity/assets/cohort_c_skin_hest.tsv \
+    --outdir $TP/data/hest --samplesheet $TP/data/skin.csv --cohort C --dry-run      # lists the 50 sections
+sbatch --job-name=dl_skin --time=06:00:00 --output=$TP/data/dl_skin_%j.log --export=ALL \
+    --wrap "python $TP/tileparity/scripts/hest_download.py --from-tsv $TP/tileparity/assets/cohort_c_skin_hest.tsv --outdir $TP/data/hest --samplesheet $TP/data/skin.csv --cohort C"
+squeue -u $USER                                   # wait until it is gone
+wc -l $TP/data/skin.csv                           # 51 lines: the header and 50 sections
+```
+
+**2. The run.** Most sections are scanned at 0.53 µm/px, 5 % coarser than the analysis scale: `--upsample_tolerance 0.06` lets the pipeline resample them to 0.5 µm/px, so that the tiles are the same 112 µm as in the colorectal slides. The cohort summary compares lesional with non-lesional skin (`--cohort_group lesion`), patient by patient (`--cohort_pair patient`).
+
+```bash
+mkdir -p $TP/runs/skin && cd $TP/runs/skin
+cp $TP/data/skin.csv samplesheet.csv
+cat > run.sbatch <<'END'
+#!/bin/bash
+#SBATCH --job-name=tp_skin
+#SBATCH --cpus-per-task=32
+#SBATCH --mem=128G
+#SBATCH --gres=gpu:1
+#SBATCH --time=24:00:00
+#SBATCH --output=%x_%j.log
+source $HOME/tileparity/env.sh
+cd $SLURM_SUBMIT_DIR
+printf 'executor {\n    cpus = %s\n    memory = "%s MB"\n}\n' "$SLURM_CPUS_PER_TASK" "$SLURM_MEM_PER_NODE" > job.config
+nvidia-smi
+nextflow run $TP/tileparity -profile conda,gpu -c job.config \
+    --input samplesheet.csv --outdir results -w work \
+    --max_cpus 32 --max_memory '120.GB' --max_time '24.h' \
+    --uni2h_weights $TP/models/uni2h/pytorch_model.bin --uni2h_batch_size 64 \
+    --scales_mpp 0.5 --upsample_tolerance 0.06 --qc_umap \
+    --cluster --redundancy --relevance --cohort_group lesion --cohort_pair patient \
+    -resume
+END
+sbatch run.sbatch
+tail -f tp_skin_<job number>.log
+```
+
+The biopsies are small (a few hundred tiles each), so the 50 sections take a few hours in all. Look first at `results/cohort/mpp0.5000/cohort_mpp0.5000.report.html`, then at `cohort_mpp0.5000.groups.png` (lesional against non-lesional, one line per patient).
+
+**3. Package and send**:
+
+```bash
+cd $TP/runs/skin
+tar czf tp_v060_skin.tgz --exclude='*.h5' --exclude='*.h5ad' --exclude='*.rds' --exclude='*.tif' \
+    results tp_skin_*.log run.sbatch samplesheet.csv
+ls -lh tp_v060_skin.tgz
+```
+
 ## Route B: containers (Apptainer or Singularity)
 
 If Apptainer or Singularity becomes available on the login node and the compute nodes, Nextflow can run on the login node and send every task to SLURM as its own job, each in the pipeline's container image (no environments to create):
@@ -396,4 +541,4 @@ nextflow run $TP/tileparity -profile uzh_rolandgarros,apptainer \
     --scales_mpp 0.5 --mask_compare --min_tissue_extract 0.3 --qc_umap
 ```
 
-Run it in `tmux` on the login node (Nextflow must keep running while the jobs run). The jobs go to the default partition (`main`) and the UNI2-h job asks for `--gres=gpu:1`; `--slurm_queue`, `--slurm_gpu_queue` and `--slurm_gpu_options` change that. `conf/uzh_rolandgarros.config` sets the SLURM executor, the resource ceilings (64 CPUs, 400 GB, 72 h per task) and the GPU request; the images (`ghcr.io/miguelrosell/tileparity-{python,uni2h,r}:0.5.0`) are public and pulled once into `~/.cache/tileparity/apptainer`. The same profile also works with conda (`-profile uzh_rolandgarros,conda`) when the login node has conda and internet access.
+Run it in `tmux` on the login node (Nextflow must keep running while the jobs run). The jobs go to the default partition (`main`) and the UNI2-h job asks for `--gres=gpu:1`; `--slurm_queue`, `--slurm_gpu_queue` and `--slurm_gpu_options` change that. `conf/uzh_rolandgarros.config` sets the SLURM executor, the resource ceilings (64 CPUs, 400 GB, 72 h per task) and the GPU request; the images (`ghcr.io/miguelrosell/tileparity-{python,uni2h,r}:0.6.0`) are public and pulled once into `~/.cache/tileparity/apptainer`. The same profile also works with conda (`-profile uzh_rolandgarros,conda`) when the login node has conda and internet access.

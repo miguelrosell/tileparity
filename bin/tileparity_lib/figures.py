@@ -185,9 +185,10 @@ def legend(items: list[tuple[tuple[int, int, int], str]], size: int = 13, swatch
 
 def line_chart(series: list[dict], x_label: str, y_label: str, size: tuple[int, int] = (900, 460),
                y_range: tuple[float, float] | None = None, x_ticks: list[float] | None = None,
-               log_x: bool = False) -> Image.Image:
+               log_x: bool = False, v_lines: list[tuple[float, str]] | None = None) -> Image.Image:
     """Simple line chart. Each series: {"name", "x", "y", optional "lo"/"hi" band, optional
-    "colour" (default: the next colour of SERIES)}."""
+    "colour" (default: the next colour of SERIES)}. ``v_lines``: (x, label) vertical dashed
+    markers."""
     W, H = size
     left, right, top, bottom = 70, 20, 30, 60
     fnt, small = font(13), font(12)
@@ -224,6 +225,13 @@ def line_chart(series: list[dict], x_label: str, y_label: str, size: tuple[int, 
     draw.line([(left, top), (left, H - bottom), (W - right, H - bottom)], fill=INK)
     draw.text((left + (W - left - right) / 2 - text_width(draw, x_label, fnt) / 2, H - 24), x_label, fill=INK, font=fnt)
     draw.text((8, 2), y_label, fill=INK, font=fnt)
+    for xv, label in (v_lines or []):
+        X, _ = px(np.array([xv]), np.array([y0]))
+        xx = float(X[0])
+        for yy in range(top, H - bottom, 8):
+            draw.line([(xx, yy), (xx, min(yy + 4, H - bottom))], fill=MUTED, width=1)
+        if label:
+            draw.text((xx + 4, H - bottom - 18), plain(label), fill=MUTED, font=small)
     for i, s in enumerate(series):
         colour = tuple(s.get("colour", SERIES[i % len(SERIES)]))
         x = np.asarray(s["x"], float)
@@ -262,3 +270,160 @@ def mask_overlay(thumb: np.ndarray, mask: np.ndarray, colour=(0, 158, 115), alph
 
 def wrap_text(text: str, width: int = 100) -> str:
     return "\n".join(textwrap.wrap(text, width))
+
+
+def hbar_chart(rows: list[dict], x_label: str, x_range: tuple[float, float] = (0.0, 1.0), width: int = 640,
+               row_h: int = 28) -> Image.Image:
+    """Horizontal bars. Each row: {"label", "segments": [(value, colour), ...] stacked from 0,
+    optional "lo"/"hi" (whisker), optional "marker" (a black tick, e.g. a null level),
+    optional "text" (written after the bar)}. Negative single values are drawn leftwards."""
+    fnt, small = font(13), font(12)
+    probe = ImageDraw.Draw(Image.new("RGB", (1, 1)))
+    lw = int(max([text_width(probe, plain(r["label"]), fnt) for r in rows] + [40])) + 14
+    right = int(max([text_width(probe, plain(r.get("text", "")), small) for r in rows] + [40])) + 24
+    top, bottom = 10, 46
+    H = top + len(rows) * row_h + bottom
+    img = Image.new("RGB", (width, H), BG)
+    draw = ImageDraw.Draw(img)
+    x0, x1 = x_range
+
+    def X(v):
+        return lw + (float(np.clip(v, x0, x1)) - x0) / (x1 - x0) * (width - lw - right)
+
+    for t in np.linspace(x0, x1, 6):
+        draw.line([(X(t), top), (X(t), H - bottom)], fill=GRID)
+        lab = f"{t:.2g}"
+        draw.text((X(t) - text_width(draw, lab, small) / 2, H - bottom + 6), lab, fill=MUTED, font=small)
+    if x0 < 0 < x1:
+        draw.line([(X(0), top), (X(0), H - bottom)], fill=INK)
+    for i, r in enumerate(rows):
+        y = top + i * row_h
+        draw.text((lw - 8 - text_width(draw, plain(r["label"]), fnt), y + row_h / 2 - 8), plain(r["label"]), font=fnt,
+                  fill=INK)
+        start = 0.0
+        for value, colour in r.get("segments", []):
+            if not np.isfinite(value):
+                continue
+            a, b = (start, start + value) if value >= 0 else (start + value, start)
+            draw.rectangle([X(a), y + 5, X(b), y + row_h - 6], fill=tuple(colour))
+            start = start + value if value >= 0 else start
+        if np.isfinite(r.get("lo", np.nan)) and np.isfinite(r.get("hi", np.nan)):
+            ym = y + row_h / 2
+            draw.line([(X(r["lo"]), ym), (X(r["hi"]), ym)], fill=INK, width=2)
+            for v in (r["lo"], r["hi"]):
+                draw.line([(X(v), ym - 5), (X(v), ym + 5)], fill=INK, width=2)
+        if np.isfinite(r.get("marker", np.nan)):
+            draw.line([(X(r["marker"]), y + 2), (X(r["marker"]), y + row_h - 3)], fill=(0, 0, 0), width=3)
+        if r.get("text"):
+            end = max([start] + [r.get("hi", -np.inf) if np.isfinite(r.get("hi", np.nan)) else -np.inf])
+            draw.text((X(end) + 6, y + row_h / 2 - 8), plain(r["text"]), font=small, fill=MUTED)
+    draw.text((lw + (width - lw - right) / 2 - text_width(draw, plain(x_label), fnt) / 2, H - 24), plain(x_label),
+              fill=INK, font=fnt)
+    return img
+
+
+def scatter_chart(x: np.ndarray, y: np.ndarray, colours, x_label: str, y_label: str, size: tuple[int, int] = (620, 560),
+                  x_range: tuple[float, float] | None = None, y_range: tuple[float, float] | None = None,
+                  labels: list[tuple[int, str]] | None = None, diagonal: bool = True, radius: int = 3) -> Image.Image:
+    """Scatter plot of points (x, y) with one colour per point (or one for all), an optional
+    y = x line and text labels next to some points (index, text)."""
+    W, H = size
+    left, right, top, bottom = 70, 20, 30, 60
+    fnt, small = font(13), font(11)
+    img = Image.new("RGB", (W, H), BG)
+    draw = ImageDraw.Draw(img)
+    x, y = np.asarray(x, float), np.asarray(y, float)
+    ok = np.isfinite(x) & np.isfinite(y)
+    x0, x1 = x_range or (float(np.nanmin(x[ok])) if ok.any() else 0.0, float(np.nanmax(x[ok])) if ok.any() else 1.0)
+    y0, y1 = y_range or (float(np.nanmin(y[ok])) if ok.any() else 0.0, float(np.nanmax(y[ok])) if ok.any() else 1.0)
+    x1, y1 = (x1 if x1 > x0 else x0 + 1), (y1 if y1 > y0 else y0 + 1)
+
+    def P(a, b):
+        return (left + (np.clip(a, x0, x1) - x0) / (x1 - x0) * (W - left - right),
+                top + (1 - (np.clip(b, y0, y1) - y0) / (y1 - y0)) * (H - top - bottom))
+
+    for t in np.linspace(0, 1, 6):
+        xv, yv = x0 + t * (x1 - x0), y0 + t * (y1 - y0)
+        X, _ = P(xv, y0)
+        _, Y = P(x0, yv)
+        draw.line([(X, top), (X, H - bottom)], fill=GRID)
+        draw.line([(left, Y), (W - right, Y)], fill=GRID)
+        draw.text((X - 10, H - bottom + 6), f"{xv:.2g}", fill=MUTED, font=small)
+        draw.text((8, Y - 7), f"{yv:.2g}", fill=MUTED, font=small)
+    if diagonal:
+        lo, hi = max(x0, y0), min(x1, y1)
+        if hi > lo:
+            draw.line([P(lo, lo), P(hi, hi)], fill=MUTED, width=1)
+    draw.line([(left, top), (left, H - bottom), (W - right, H - bottom)], fill=INK)
+    cols = colours if isinstance(colours, (list, np.ndarray)) and len(colours) == len(x) else [colours] * len(x)
+    order = np.argsort([sum(c) for c in cols])[::-1]  # light points first, strong colours on top
+    for i in order:
+        if ok[i]:
+            a, b = P(x[i], y[i])
+            draw.ellipse([a - radius, b - radius, a + radius, b + radius], fill=tuple(cols[i]))
+    for i, text in (labels or []):
+        if ok[i]:
+            a, b = P(x[i], y[i])
+            draw.text((a + 5, b - 7), plain(text), fill=INK, font=small)
+    draw.text((left + (W - left - right) / 2 - text_width(draw, plain(x_label), fnt) / 2, H - 24), plain(x_label),
+              fill=INK, font=fnt)
+    draw.text((8, 4), plain(y_label), fill=INK, font=fnt)
+    return img
+
+
+def strip_chart(categories: list[str], points: list[list[tuple]], y_label: str, y_range: tuple[float, float] = (0, 1),
+                width: int | None = None, height: int = 380, lines: list[list[tuple[int, float, int, float]]] | None = None,
+                cat_colours: list | None = None) -> Image.Image:
+    """Values of several samples per category: ``points[i]`` = [(value, colour), ...] for
+    category i, drawn as jittered dots with the mean as a black bar. ``lines``: optional
+    segments [(i_from, y_from, i_to, y_to), ...] joining paired values (drawn grey)."""
+    n = len(categories)
+    fnt, small = font(13), font(12)
+    probe = ImageDraw.Draw(Image.new("RGB", (1, 1)))
+    lab_h = int(max([text_width(probe, plain(c), small) for c in categories] + [20])) + 12
+    W = width or max(420, 90 + n * 70)
+    left, right, top, bottom = 70, 20, 30, lab_h + 34
+    img = Image.new("RGB", (W, height), BG)
+    draw = ImageDraw.Draw(img)
+    y0, y1 = y_range
+    step = (W - left - right) / max(n, 1)
+
+    def X(i):
+        return left + (i + 0.5) * step
+
+    def Y(v):
+        return top + (1 - (float(np.clip(v, y0, y1)) - y0) / (y1 - y0)) * (height - top - bottom)
+
+    step_t = 0.2 if (y1 - y0) > 0.6 else 0.1
+    for t in np.arange(np.ceil(y0 / step_t) * step_t, y1 + 1e-9, step_t):
+        draw.line([(left, Y(t)), (W - right, Y(t))], fill=GRID)
+        draw.text((8, Y(t) - 7), f"{t:.1f}", fill=MUTED, font=small)
+    if y0 < 0 < y1:
+        draw.line([(left, Y(0)), (W - right, Y(0))], fill=MUTED)
+    draw.line([(left, top), (left, height - bottom), (W - right, height - bottom)], fill=INK)
+    for seg in (lines or []):
+        for i0, v0, i1, v1 in seg:
+            draw.line([(X(i0), Y(v0)), (X(i1), Y(v1))], fill=(170, 170, 170), width=1)
+    rng = np.random.default_rng(0)
+    for i, pts in enumerate(points):
+        vals = [v for v, _c in pts if np.isfinite(v)]
+        for v, c in pts:
+            if not np.isfinite(v):
+                continue
+            x = X(i) + float(rng.uniform(-0.18, 0.18)) * step
+            draw.ellipse([x - 4, Y(v) - 4, x + 4, Y(v) + 4], fill=tuple(c), outline=(60, 60, 60))
+        if vals:
+            m = float(np.mean(vals))
+            draw.line([(X(i) - 0.3 * step, Y(m)), (X(i) + 0.3 * step, Y(m))], fill=(0, 0, 0), width=3)
+        lab = vertical_text_img(categories[i], small, (cat_colours[i] if cat_colours else INK))
+        img.paste(lab, (int(X(i) - lab.width / 2), height - bottom + 6))
+    draw.text((8, 4), plain(y_label), fill=INK, font=fnt)
+    return img
+
+
+def vertical_text_img(text: str, fnt, fill=INK) -> Image.Image:
+    probe = ImageDraw.Draw(Image.new("RGB", (1, 1)))
+    box = probe.textbbox((0, 0), plain(text), font=fnt)
+    img = Image.new("RGB", (box[2] - box[0] + 4, box[3] - box[1] + 4), BG)
+    ImageDraw.Draw(img).text((2 - box[0], 2 - box[1]), plain(text), font=fnt, fill=tuple(fill))
+    return img.rotate(90, expand=True)

@@ -48,9 +48,15 @@
 ## `<sample>/mpp<scale>/cluster/` — clustering of every view (with `--cluster`)
 
 * `<id>.clusters.tsv.gz`: one row per extracted tile: `tile_id`, `in_keep`, `in_extended` (the two tile sets) and the cluster of the tile in every clustering, in columns `<set>_<view>_<method>_k<k>` (e.g. `keep_UNI2H_RGB_leiden_k8`; empty for tiles outside the set). Clusters are numbered from 0, the largest, separately for every view and slide.
-* `<id>.cluster_agreement.tsv`: one row per pair of views, tile set, method and k: `set`, `method`, `k`, `view_a`, `view_b`, `n_tiles`, `k_a` and `k_b` (clusters actually reached), `ari`, `nmi`, `null_moves`, `null_ari_mean`, `null_ari_p05`, `null_ari_p50`, `null_ari_p95` and `p_null` (the spatial null; `NA` without a tile grid). Rows with `method` = `leiden_vs_kmeans` compare the two methods on the same view.
-* `<id>.cluster.json`: the parameters, `view_descriptions` (what each view is: `"LBP_H": "LBP histograms of the H (haematoxylin) amount alone"`, …), and per tile set its definition, size, the values of k used, the reference view and, per view, the features, principal components, Leiden resolution and clusters reached for every k; the reason when a set or view was not clustered.
-* `<id>.cluster_agreement_<set>.png`: ARI of every pair of views at `--cluster_k_ref` (Leiden and k-means; the grey diagonal compares the two methods on one view) and ARI of every view with the reference view for every k, with the spatial null.
+* `<id>.cluster_agreement.tsv`: one row per pair of views, tile set, method and k: `set`, `method`, `k`, `view_a`, `view_b`, `n_tiles`, `k_a` and `k_b` (clusters actually reached), `ari`, `nmi`, `null_moves`, `null_ari_mean`, `null_ari_p05`, `null_ari_p50`, `null_ari_p95` and `p_null` (the spatial null; `NA` without a tile grid) and `ari_corrected` = (ARI − `null_ari_mean`) / (1 − `null_ari_mean`), the share of the way from the agreement of two unrelated maps with the same patchiness (0) to identical partitions (1). Rows with `method` = `leiden_vs_kmeans` compare the two methods on the same view.
+* `<id>.cluster_summary.tsv`: one row per set, method and pair of views: `n_k` (values of k reached by both), `ari_mean_k` and `ari_corrected_mean_k` (averages over k), `k_show` (the k of the figures), `ari_k_show`, `ari_corrected_k_show`, `null_ari_p95_k_show` and `above_null_k_show`.
+* `<id>.cluster_f1.tsv`: one row per set, method, k, view and domain (cluster of the reference view): `n_domain`, `matched_cluster` (the view's cluster matched one-to-one to it), `n_cluster`, `n_both`, `precision`, `recall`, `f1`. Macro-F1 = the mean of `f1` over the domains.
+* `<id>.cluster_stability.tsv`: per subsample (`rep`), set `keep`, method, k and view: `n_tiles`, `k_reached`, `ari_with_reference` (with the reference view clustered on the same subsample) and `ari_with_full` (with the view's own clustering of all tiles).
+* `<id>.cluster_representatives.tsv`: the tiles of the galleries: per view, method and the k shown, the `rank`-th tile closest to the centre of every cluster (`kind` = `cluster`, `group` = cluster, `colour` = the reference cluster it is matched to, `value` = distance), and for PCs 1–3 the tiles with the highest and lowest scores (`pc_high`, `pc_low`).
+* `<id>.cluster.json`: the parameters, `view_descriptions` (what each view is: `"LBP_H": "LBP histograms of the H (haematoxylin) amount alone"`, …), and per tile set its definition, size, the values of k used, the k shown per method (`k_show`, with `k_choice`: the score of every k, and `k_show_rule`), the reference view and, per view, the features, principal components, Leiden resolution and clusters reached for every k; the reason when a set or view was not clustered.
+* `<id>.cluster_agreement_<set>.png`: ARI of every pair of views at the k shown (per method; the grey diagonal compares the two methods on one view; `<= null` marks values that do not exceed the 95th percentile of their spatial null), the ARI averaged over k with the corrected ARI, and the ARI of every view with the reference view for every k, with the spatial null and the k shown marked.
+* `<id>.cluster_f1_<set>.png`: F1 of every reference domain for every view at the k shown, and macro-F1 by k.
+* `<id>.cluster_stability_keep.png`: the ARI with the reference view on subsamples (mean ± standard deviation) and the ARI of every view's subsample clustering with its clustering of all tiles, by k.
 * `<id>.cluster_maps_<set>.png`: the clusters of every view on the slide, coloured after the matching clusters of the reference view (`EXPRESSION`, or `UNI2H_RGB` for slides without expression).
 * `<id>.cluster_contingency_keep.png`: for every view, where the tiles of each of its clusters fall among the reference view's clusters.
 
@@ -67,7 +73,35 @@ With `--redundancy` (set `keep`; method in [design.md](design.md#optional-redund
 * `<id>.redundancy_tiles.tsv.gz`: per tile, its cross-validation `fold` and, for UNI2-h and LBP on the same pixels both ways, `unexplained_<target>_from_<predictor>`: the part of the target that the predictor does not predict, relative to the target's average variation (mean over the tiles = 1 − R²).
 * `<id>.redundancy_keep.png`: the matrix of R² (rows predict columns) and the R² of each component for UNI2-h and LBP on the same pixels.
 * `<id>.redundancy_maps_keep.png`: the H&E thumbnail and the per-tile unexplained part on the slide.
-* `<id>.cluster.json`: `redundancy` records the views, the folds and their sizes, and the block size.
+* `<id>.cluster.json`: `redundancy` records the views, the folds and their sizes, the block size, the null and the bootstrap.
+
+Since 0.6.0 `redundancy.tsv` also has `r2_fold_min`, `r2_fold_max`, `r2_fold_sd` (R² of each fold's tiles), `r2_ci_low` and `r2_ci_high` (95 % block-bootstrap interval), `null_moves`, `r2_null_mean`, `r2_null_p95` and `p_null` (the spatial null: the predictor's map moved over the tile grid).
+
+With `--relevance` (set `keep`; method in [design.md](design.md#optional-relevance-what-the-image-predicts-of-the-expression---relevance)):
+
+* `<id>.relevance.tsv`: one row per predictor (`kind` = `view`, or `joint` for two views side by side, named `<a>+<b>`): `r2` of the expression's principal components, `r2_pc1`, `r2_ci_low`, `r2_ci_high`, `r2_fold_sd` and, for single views, the spatial null (`r2_null_mean`, `r2_null_p95`, `p_null`).
+* `<id>.relevance_partition.tsv`: per pair of views A, B: `r2_a`, `r2_b`, `r2_ab`, `unique_a` (= `r2_ab` − `r2_b`), `unique_b`, `shared`.
+* `<id>.relevance_genes.tsv.gz`: per gene (`gene_id`, `gene_name`): `r2_<view>` for every gene view, its null (`r2_null_mean_<view>`, `r2_null_sd_<view>`), `z_<view>`, `p_<view>` (one-sided, normal) and `q_<view>` (Benjamini–Hochberg); `r2_<a>+<b>` and `adds_<b>_to_<a>` for UNI2-h + LBP and INTENSITY_HE + LBP.
+* `<id>.relevance_keep.png`, `<id>.relevance_genes_keep.png`: the figures.
+
+## `<sample>/mpp<scale>/gallery/` — typical tiles (with `--cluster`, `--cluster_gallery`)
+
+* `<id>.gallery_<view>.png`: for every view, the most typical tiles of every cluster at the k shown (Leiden when computed) and the tiles at both ends of principal components 1–3, cut from Process 1's image.
+
+## `<sample>/mpp<scale>/patch_sweep/` — patch size of fastLBP (with `--patch_sweep`, Visium HD)
+
+* `<id>.patch_sweep.tsv`: one row per patch size: `size_um`, `cells_per_side`, `patch_px`, `n_patches`, `n_radii`, `max_radius_px`, `molecules_median` (molecules per patch), `r2_full` (expression's components from LBP) with `r2_full_ci_low`/`_high`, `r2_half` (half B from LBP), `r2_ceiling` (half B from half A), `fraction` (= `r2_half` / `r2_ceiling`, the share of the reachable) and `fraction_se`, `n_folds`, `ari_k<k>`.
+* `<id>.patch_sweep_radius.tsv`: the same with one radius at a time (`size_um`, `radius_px`, `r2_half`, `fraction`).
+* `<id>.patch_sweep.json`: parameters, status and the sweet spot (the smallest size within one standard error of the largest `fraction`); `<id>.patch_sweep.png`: the figure.
+
+## `cohort/mpp<scale>/` — every slide together (with `--cluster`, `--cohort_summary`)
+
+* `cohort_mpp<scale>.long.tsv.gz`: one row per slide, analysis (`agreement`, `f1`, `stability`, `redundancy`, `relevance`, `relevance_partition`), set, method, k, views `a` and `b`, `metric` and `value`, with the samplesheet metadata.
+* `cohort_mpp<scale>.key.tsv`: one row per slide and image view: ARI and corrected ARI averaged over k and at the k shown (k-means and Leiden), macro-F1 averaged over k, stability, relevance R², and the metadata.
+* `cohort_mpp<scale>.groups.tsv`: with a grouping column (`--cohort_group`): every key number per group (patients averaged), the test used (paired Wilcoxon, Mann–Whitney or Kruskal–Wallis) and its p-value.
+* `cohort_mpp<scale>.genes.tsv.gz`: every gene's R² from each view, mean over the slides and number of slides.
+* `cohort_mpp<scale>.patch_sweep.tsv`: the patch sweeps of every slide (when run).
+* figures (`agreement`, `ari_by_k`, `f1`, `redundancy`, `relevance`, `groups`, `patch_sweep`) and `cohort_mpp<scale>.report.html`, one page with every figure, the key table and links to every slide's figures.
 
 ## `export/mpp<scale>/`
 

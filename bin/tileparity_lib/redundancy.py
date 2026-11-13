@@ -28,6 +28,19 @@ is the part LBP cannot predict.
   it show where on the slide the view-specific information lies (tissue, or artefacts).
 
 R^2 is out-of-sample, so it can be slightly negative when A predicts nothing of B.
+
+How much to trust an R^2 (classical p-values do not apply: neighbouring tiles are not
+independent observations):
+
+* Interval: the spatial blocks are resampled with replacement (block bootstrap of the
+  out-of-fold predictions, ``n_boot`` times) and R^2 recomputed; the 2.5 and 97.5
+  percentiles give a 95 % interval. The spread of R^2 between the folds is also reported.
+* Spatial null: A's map is moved over B's on the tile grid with wrap-around (the moves of
+  the clustering's null, :func:`tileparity_lib.cluster.torus_pairs`), so that A keeps its
+  spatial structure but no longer describes the same tissue as B, and B is predicted again
+  from the moved A with the same cross-validation. The R^2 of the moved maps is the level
+  reached by chance; ``p_null`` = (1 + moves with R^2 >= the real one) / (1 + moves). Only
+  for tiles on the grid.
 """
 
 from __future__ import annotations
@@ -37,7 +50,8 @@ import pandas as pd
 
 ALPHAS = np.logspace(-2, 5, 15)  # ridge penalties tried on the training folds
 TABLE_COLUMNS = ["set", "predictor", "target", "n_tiles", "n_folds", "block_um", "n_pcs_predictor", "n_pcs_target",
-                 "target_pc_variance", "r2", "r2_pc1", "r2_pcs1_5", "alpha_median"]
+                 "target_pc_variance", "r2", "r2_pc1", "r2_pcs1_5", "alpha_median", "r2_fold_min", "r2_fold_max",
+                 "r2_fold_sd", "r2_ci_low", "r2_ci_high", "null_moves", "r2_null_mean", "r2_null_p95", "p_null"]
 
 
 def tile_centres_um(tiles: pd.DataFrame, mpp: float | None) -> tuple[np.ndarray, np.ndarray, str]:
@@ -50,6 +64,14 @@ def tile_centres_um(tiles: pd.DataFrame, mpp: float | None) -> tuple[np.ndarray,
     return (x0 + T / 2) / T, (y0 + T / 2) / T, "tiles"
 
 
+def spatial_blocks(x: np.ndarray, y: np.ndarray, block: float) -> np.ndarray:
+    """Block (0 .. n - 1) of every tile: square blocks of side ``block`` (same unit as x, y)."""
+    x, y = np.asarray(x, float), np.asarray(y, float)
+    bx = np.floor((x - x.min()) / block).astype(int)
+    by = np.floor((y - y.min()) / block).astype(int)
+    return pd.factorize(pd.Series(list(zip(bx.tolist(), by.tolist()))))[0]
+
+
 def spatial_folds(x: np.ndarray, y: np.ndarray, block: float, n_folds: int, seed: int) -> np.ndarray | None:
     """Fold (0 .. n_folds - 1) of every tile: square blocks of side ``block`` (same unit as x
     and y), each block in one fold, blocks given in random order to the fold with the fewest
@@ -57,9 +79,7 @@ def spatial_folds(x: np.ndarray, y: np.ndarray, block: float, n_folds: int, seed
     x, y = np.asarray(x, float), np.asarray(y, float)
     if x.size == 0:
         return None
-    bx = np.floor((x - x.min()) / block).astype(int)
-    by = np.floor((y - y.min()) / block).astype(int)
-    block_id = pd.factorize(pd.Series(list(zip(bx.tolist(), by.tolist()))))[0]
+    block_id = spatial_blocks(x, y, block)
     n_blocks = int(block_id.max()) + 1
     k = int(min(n_folds, n_blocks))
     if k < 2:
@@ -103,6 +123,48 @@ def r2_scores(Y: np.ndarray, pred: np.ndarray) -> tuple[float, np.ndarray]:
     return total, per
 
 
+def fold_r2(Y: np.ndarray, pred: np.ndarray, folds: np.ndarray) -> np.ndarray:
+    """R^2 of every fold's tiles (sums of squares around the mean of all tiles)."""
+    Y = np.asarray(Y, float)
+    mu = Y.mean(axis=0)
+    out = []
+    for f in np.unique(folds):
+        m = folds == f
+        tot = ((Y[m] - mu) ** 2).sum()
+        out.append(1 - ((Y[m] - pred[m]) ** 2).sum() / tot if tot > 0 else np.nan)
+    return np.array(out, float)
+
+
+def block_bootstrap_r2(Y: np.ndarray, pred: np.ndarray, blocks: np.ndarray, n_boot: int, seed: int) -> np.ndarray:
+    """R^2 of ``n_boot`` resamples of the spatial blocks (with replacement)."""
+    Y = np.asarray(Y, float)
+    mu = Y.mean(axis=0)
+    res = ((Y - pred) ** 2).sum(axis=1)
+    tot = ((Y - mu) ** 2).sum(axis=1)
+    ids = np.unique(blocks)
+    if n_boot <= 0 or len(ids) < 2:
+        return np.array([], float)
+    res_b = np.bincount(np.searchsorted(ids, blocks), weights=res, minlength=len(ids))
+    tot_b = np.bincount(np.searchsorted(ids, blocks), weights=tot, minlength=len(ids))
+    rng = np.random.default_rng(seed)
+    draws = rng.integers(0, len(ids), size=(n_boot, len(ids)))
+    T = tot_b[draws].sum(axis=1)
+    return np.where(T > 0, 1 - res_b[draws].sum(axis=1) / np.where(T > 0, T, 1), np.nan)
+
+
+def null_r2(X: np.ndarray, Y: np.ndarray, folds: np.ndarray, moves, alphas=ALPHAS) -> np.ndarray:
+    """R^2 of Y predicted from X moved over the tile grid: for every move (i, j), tile i of Y
+    is paired with tile j of X; same folds as the real prediction (those of the Y tiles)."""
+    out = []
+    for i, j in moves:
+        f = folds[i]
+        if len(np.unique(f)) < 2:
+            continue
+        pred, _ = cross_predict(X[j], Y[i], f, alphas)
+        out.append(r2_scores(Y[i], pred)[0])
+    return np.array(out, float)
+
+
 def unexplained_per_tile(Y: np.ndarray, pred: np.ndarray) -> np.ndarray:
     """Squared prediction error of every tile relative to the average squared distance of a
     tile from B's mean (mean over the tiles = 1 - R^2)."""
@@ -123,7 +185,8 @@ def default_map_pairs(views: list[str]) -> list[tuple[str, str]]:
 
 
 def run(scores: dict, variance: dict, tiles: pd.DataFrame, views: list[str], set_name: str, mpp: float | None,
-        n_folds: int = 5, block_um: float = 1000.0, seed: int = 0, map_pairs=None) -> dict:
+        n_folds: int = 5, block_um: float = 1000.0, seed: int = 0, map_pairs=None, null_shifts: int = 20,
+        n_boot: int = 200) -> dict:
     """Cross-prediction between every ordered pair of ``views`` of one tile set.
 
     ``scores``: {view: tiles x components}; ``variance``: {view: share of the view's
@@ -145,6 +208,15 @@ def run(scores: dict, variance: dict, tiles: pd.DataFrame, views: list[str], set
         return {"info": info}
     info["n_folds"] = int(folds.max()) + 1
     info["fold_sizes"] = np.bincount(folds).tolist()
+    blocks = spatial_blocks(x, y, block)
+    moves = []
+    if null_shifts > 0 and "row" in tiles and (tiles["row"].astype(int) >= 0).all():
+        from .cluster import torus_pairs
+
+        moves = torus_pairs(tiles["row"], tiles["col"], null_shifts, seed)
+    info["null"] = ({"moves": len(moves), "min_shift": 0.2, "min_overlap": 0.3} if moves else
+                    {"moves": 0, "note": "not computed: tiles not on a grid, or no possible move"})
+    info["bootstrap"] = {"resamples": int(n_boot), "unit": "spatial block", "n_blocks": int(blocks.max()) + 1}
     pairs = [(a, b) for a in views for b in views if a != b]
     drawn = set(map_pairs if map_pairs is not None else default_map_pairs(views))
     rows, pc_rows, per_tile = [], [], {}
@@ -155,12 +227,23 @@ def run(scores: dict, variance: dict, tiles: pd.DataFrame, views: list[str], set
         share = var / var.sum() if var.sum() > 0 else np.full(var.size, np.nan)
         top5 = slice(0, min(5, per.size))
         r2_top5 = float(np.nansum(per[top5] * share[top5]) / np.nansum(share[top5])) if per.size else float("nan")
+        fr = fold_r2(scores[b], pred, folds)
+        boot = block_bootstrap_r2(scores[b], pred, blocks, n_boot, seed)
+        null = null_r2(scores[a], scores[b], folds, moves) if moves else np.array([], float)
         rows.append({"set": set_name, "predictor": a, "target": b, "n_tiles": int(len(tiles)),
                      "n_folds": info["n_folds"], "block_um": float(block_um) if unit == "um" else float("nan"),
                      "n_pcs_predictor": int(scores[a].shape[1]), "n_pcs_target": int(scores[b].shape[1]),
                      "target_pc_variance": float(variance.get(b, float("nan"))), "r2": total,
                      "r2_pc1": float(per[0]) if per.size else float("nan"), "r2_pcs1_5": r2_top5,
-                     "alpha_median": float(np.median(alphas))})
+                     "alpha_median": float(np.median(alphas)),
+                     "r2_fold_min": float(np.nanmin(fr)), "r2_fold_max": float(np.nanmax(fr)),
+                     "r2_fold_sd": float(np.nanstd(fr, ddof=1)) if len(fr) > 1 else float("nan"),
+                     "r2_ci_low": float(np.nanpercentile(boot, 2.5)) if boot.size else float("nan"),
+                     "r2_ci_high": float(np.nanpercentile(boot, 97.5)) if boot.size else float("nan"),
+                     "null_moves": int(null.size),
+                     "r2_null_mean": float(null.mean()) if null.size else float("nan"),
+                     "r2_null_p95": float(np.percentile(null, 95)) if null.size else float("nan"),
+                     "p_null": float((1 + (null >= total).sum()) / (1 + null.size)) if null.size else float("nan")})
         for j in range(per.size):
             pc_rows.append({"set": set_name, "predictor": a, "target": b, "pc": j + 1,
                             "variance_share": float(share[j]), "r2": float(per[j])})

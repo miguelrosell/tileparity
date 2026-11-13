@@ -1,7 +1,9 @@
 // Optional (--cluster) - every feature view of one slide and scale clustered on its own
 // (Leiden and k-means at the same numbers of clusters), and how much the views agree
-// (adjusted Rand index, NMI, spatial null), with figures. With --redundancy, also how much
-// of each image view the others predict (redundancy*).
+// (adjusted Rand index, NMI, spatial null, corrected ARI, F1 per expression domain,
+// stability under subsampling), with figures. With --redundancy, also how much of each
+// image view the others predict (redundancy*); with --relevance, how much of the
+// expression (components and genes) each image view predicts (relevance*).
 process TILEPARITY_CLUSTER {
     tag "${meta.id}"
     label 'process_medium'
@@ -17,6 +19,10 @@ process TILEPARITY_CLUSTER {
     tuple val(meta), path("${prefix}.cluster_agreement.tsv"), path("${prefix}.cluster.json")     , emit: agreement
     tuple val(meta), path("${prefix}.cluster_*.png")                       , optional: true       , emit: figures
     tuple val(meta), path("${prefix}.redundancy*")                         , optional: true       , emit: redundancy
+    tuple val(meta), path("${prefix}.relevance*")                          , optional: true       , emit: relevance
+    tuple val(meta), path("${prefix}.cluster_{summary,f1,stability}.tsv")  , optional: true       , emit: tables
+    tuple val(meta), path("${prefix}.cluster_representatives.tsv")         , optional: true       , emit: representatives
+    tuple val(meta), path("${prefix}.{cluster_agreement.tsv,cluster_summary.tsv,cluster_f1.tsv,cluster_stability.tsv,cluster.json,redundancy.tsv,relevance.tsv,relevance_partition.tsv,relevance_genes.tsv.gz}"), emit: cohort
     path "versions.yml"                                                                        , emit: versions
 
     script:

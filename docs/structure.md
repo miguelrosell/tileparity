@@ -42,7 +42,10 @@ Every task of Processes 1 to 3 and of the clustering works on one sample at one 
 | `TILEPARITY_EXPORTSPE` | `spe`, `spe_combined` | everything above, for all samples of a scale | `<id>.rds`, `combined_mpp<scale>.rds` | `export/mpp<scale>/spe/` |
 | `TILEPARITY_EXPORTANNDATA` | `anndata`, `anndata_combined` | as the SPE export | `<id>.h5ad`, `combined_mpp<scale>.h5ad` | `export/mpp<scale>/anndata/` |
 | `TILEPARITY_QCUMAP` | `qc_umap` | as the exports | `combined_mpp<scale>.qc_umap.{html,tsv.gz}` | `qc/mpp<scale>/` |
-| `TILEPARITY_CLUSTER` | `cluster` | the outputs of Processes 1 to 3 for one sample and scale | `clusters.tsv.gz`, `cluster_agreement.tsv`, `cluster.json`, `cluster_{agreement,maps}_<set>.png`, `cluster_contingency_keep.png`; with `--cluster_lbp_recipes` `cluster_lbp_recipes_<set>.png`; with `--redundancy` `redundancy.tsv`, `redundancy_pcs.tsv.gz`, `redundancy_tiles.tsv.gz`, `redundancy{,_maps}_keep.png` | `<sample>/mpp<scale>/cluster/` |
+| `TILEPARITY_CLUSTER` | `cluster` | the outputs of Processes 1 to 3 for one sample and scale | `clusters.tsv.gz`, `cluster_agreement.tsv`, `cluster_summary.tsv`, `cluster_f1.tsv`, `cluster_stability.tsv`, `cluster_representatives.tsv`, `cluster.json`, `cluster_{agreement,maps,f1}_<set>.png`, `cluster_{contingency,stability}_keep.png`; with `--cluster_lbp_recipes` `cluster_lbp_recipes_<set>.png`; with `--redundancy` `redundancy.tsv`, `redundancy_pcs.tsv.gz`, `redundancy_tiles.tsv.gz`, `redundancy{,_maps}_keep.png`; with `--relevance` `relevance.tsv`, `relevance_partition.tsv`, `relevance_genes.tsv.gz`, `relevance{,_genes}_keep.png` | `<sample>/mpp<scale>/cluster/` |
+| `TILEPARITY_GALLERY` | `gallery` | `resampled.tif`, `tiles.tsv.gz`, `cluster_representatives.tsv` | `gallery_<view>.png` | `<sample>/mpp<scale>/gallery/` |
+| `TILEPARITY_COHORT` | `cohort` | the clustering tables of every slide of a scale (and their patch sweeps), the samplesheet metadata | `cohort_mpp<scale>.{long.tsv.gz,key.tsv,groups.tsv,genes.tsv.gz,patch_sweep.tsv}`, figures, `report.html` | `cohort/mpp<scale>/` |
+| `TILEPARITY_PATCH_SWEEP` | `patch_sweep` | `channels.tif`, `channels.json`, `tiles.tsv.gz`, `prepare.json`, the Visium HD folder | `patch_sweep.tsv`, `patch_sweep_radius.tsv`, `patch_sweep.json`, `patch_sweep.png` | `<sample>/mpp<scale>/patch_sweep/` |
 
 Every process also writes `<id>.<step>.lineage.json` next to its outputs (published with them) and a `versions.yml` (collected in `pipeline_info/software_versions.yml`). The large images (`resampled.tif`, `channels.tif`) stay in the work directory unless `--publish_images` is set.
 
@@ -117,3 +120,10 @@ Every figure is a PNG with a title strip, the figure and a caption underneath in
 | `cluster/<id>.cluster_lbp_recipes_<set>.png` | clustering, with `--cluster_lbp_recipes` | every LBP view against the reference view by k, with its histograms prepared in three ways |
 | `cluster/<id>.redundancy_keep.png` | clustering, with `--redundancy` | how much of each image view the others predict (R² matrix), and per principal component for UNI2-h and LBP on the same pixels |
 | `cluster/<id>.redundancy_maps_keep.png` | clustering, with `--redundancy` | where on the slide UNI2-h and LBP each have what the other does not predict |
+| `cluster/<id>.cluster_f1_<set>.png` | clustering, with `--cluster` | which expression domains every view finds (F1 per domain at the k shown, macro-F1 by k) |
+| `cluster/<id>.cluster_stability_keep.png` | clustering, with `--cluster` | how much every clustering changes on subsamples of the tiles |
+| `cluster/<id>.relevance_keep.png` | clustering, with `--relevance` | how much of the expression every image view predicts, and what each adds to another |
+| `cluster/<id>.relevance_genes_keep.png` | clustering, with `--relevance` | every gene's R² from UNI2-h and from LBP; the genes best predicted from LBP |
+| `gallery/<id>.gallery_<view>.png` | gallery, with `--cluster` | the most typical tiles of every cluster and the tiles at both ends of the first components |
+| `patch_sweep/<id>.patch_sweep.png` | patch sweep, with `--patch_sweep` | what LBP predicts of the expression by patch size, with the noise ceiling, and by radius |
+| `cohort/mpp<scale>/cohort_mpp<scale>.*.png`, `report.html` | cohort summary, with `--cluster` | every slide together: agreement, ARI by k, F1, redundancy, relevance, groups, patch sweep |
