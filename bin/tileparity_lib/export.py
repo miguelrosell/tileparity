@@ -137,12 +137,30 @@ def load_sample(directory: str | Path, prefix: str) -> dict:
             "lineage": merged}
 
 
+def unique_names(names) -> list[str]:
+    """Names made unique by appending -1, -2, ... to repeats (as AnnData's
+    var_names_make_unique). HEST files without gene ids name genes by symbol, and a few
+    symbols occur twice; a repeated index makes the combined AnnData impossible to build."""
+    seen: dict[str, int] = {}
+    out = []
+    for n in map(str, names):
+        if n in seen:
+            seen[n] += 1
+            out.append(f"{n}-{seen[n]}")
+        else:
+            seen[n] = 0
+            out.append(n)
+    return out
+
+
 def to_anndata(s: dict):
     import anndata as ad
 
     tiles = s["tiles"].copy()
     tiles.index = tiles["tile_id"].astype(str).to_numpy()
-    var = pd.DataFrame({"gene_name": np.asarray(s["gene_names"], dtype=str)}, index=pd.Index(np.asarray(s["gene_ids"], dtype=str)))
+    var = pd.DataFrame({"gene_name": np.asarray(s["gene_names"], dtype=str),
+                        "gene_id": np.asarray(s["gene_ids"], dtype=str)},
+                       index=pd.Index(unique_names(np.asarray(s["gene_ids"], dtype=str))))
     Y = sparse.csr_matrix(s["counts"].T)
     X = Y.astype(np.int32) if st.is_integer(Y) else Y.astype(np.float32)
     obsm = {f"X_{k.lower()}": np.asarray(v[0], dtype=np.float32) for k, v in s["blocks"].items()}

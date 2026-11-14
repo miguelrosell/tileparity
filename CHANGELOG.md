@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.6.1 (2026-11-14)
+
+* Fix: the combined AnnData export failed for HEST samples whose genes are named by symbol only (a few symbols occur twice, and AnnData cannot combine objects with a repeated gene index). Gene names are now made unique (`-1`, `-2`, ... appended to repeats, as AnnData's `var_names_make_unique`) and the original id is kept in `var["gene_id"]`. Found on the skin cohort; the colorectal slides were not affected.
+
 ## 0.6.0 (2026-11-13)
 
 What the 0.5.0 run on real slides asked for, and the analyses agreed after it: how much to trust a clustering and an R², which tissues each view finds, what the image predicts of the expression, the patch size of fastLBP, and every slide in one summary. Core outputs unchanged; one default of the clustering figures changed (`--cluster_k_ref auto`).

@@ -177,3 +177,9 @@ def test_hest_cohort_table_leaves_out_two_patient_and_coarse_sections(tmp_path):
     real = Path(__file__).resolve().parents[2] / "assets" / "cohort_c_skin_hest.tsv"
     ids, meta = hest_download.read_table(str(real), 0.6)
     assert len(ids) == 50 and len({m["patient"] for m in meta.values()}) == 13
+
+
+def test_repeated_gene_names_become_unique_for_anndata():
+    from tileparity_lib.export import unique_names
+
+    assert unique_names(["A", "B", "A", "A", "C"]) == ["A", "B", "A-1", "A-2", "C"]
