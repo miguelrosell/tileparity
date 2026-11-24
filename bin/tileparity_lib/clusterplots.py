@@ -587,11 +587,28 @@ def relevance_figure(rel: dict, caption: dict, prefix: str, set_name: str = "kee
     views = table[table["kind"] == "view"]
     rows = []
     for r in views.itertuples(index=False):
+        frac = getattr(r, "fraction", np.nan)
+        text = f"{r.r2:.2f}" + (f" ({frac:.0%} of the reachable)" if np.isfinite(frac) else "")
         rows.append({"label": r.predictor, "segments": [(r.r2, VIEW_COLOURS.get(r.predictor, figures.SERIES[0]))],
-                     "lo": r.r2_ci_low, "hi": r.r2_ci_high, "marker": r.r2_null_p95, "text": f"{r.r2:.2f}"})
+                     "lo": r.r2_ci_low, "hi": r.r2_ci_high, "marker": r.r2_null_p95, "text": text})
     lo = min(0.0, float(np.nanmin(views["r2"])) - 0.05)
-    a = figures.hbar_chart(rows, "R2 of the expression's components", x_range=(max(lo, -0.25), 1.0), width=640)
-    parts = [figures.stack([figures.title_strip(640, "a. Expression predicted from every image view", 14), a])]
+    a = figures.hbar_chart(rows, "R2 of the expression's components", x_range=(max(lo, -0.25), 1.0), width=700)
+    top = [figures.stack([figures.title_strip(700, "a. Expression predicted from every image view", 14), a])]
+    pcs = [c for c in table.columns if c.startswith("r2_pc")]
+    series = []
+    for r in views.itertuples(index=False):
+        y = np.array([getattr(r, c) for c in pcs], float)
+        if np.isfinite(y).any():
+            series.append({"name": r.predictor, "x": np.arange(1, len(pcs) + 1, dtype=float), "y": y,
+                           "colour": VIEW_COLOURS.get(r.predictor, figures.SERIES[len(series) % len(figures.SERIES)])})
+    if series:
+        lo_pc = float(np.nanmin(np.concatenate([s["y"] for s in series])))
+        chart = figures.line_chart(series, "expression component", "R2 of the component", size=(420, 300),
+                                   y_range=(0.0 if lo_pc >= 0 else -0.25, 1.0), x_ticks=list(range(1, len(pcs) + 1)))
+        items = [(s["colour"], s["name"]) for s in series]
+        top.append(figures.stack([figures.title_strip(420, "c. Per component (PC1 = largest)", 14), chart,
+                                  figures.legend(items, width=420, size=11)]))
+    parts = [_side_by_side(top)]
     if part is not None and len(part):
         rows_b = []
         for r in part.itertuples(index=False):
@@ -611,18 +628,28 @@ def relevance_figure(rel: dict, caption: dict, prefix: str, set_name: str = "kee
                                 **caption)
 
 
+
+
+GENE_CATEGORY_COLOURS = {"both": (117, 77, 160), "only_y": (213, 94, 0), "only_x": (0, 114, 178),
+                         "neither": (205, 205, 205)}
+
+
 def relevance_genes_figure(rel: dict, caption: dict, prefix: str, x_view: str = "UNI2H_RGB", y_view: str = "LBP_RGB",
                            n_labels: int = 12) -> Image.Image | None:
-    """a: every gene's R^2 from two views (coloured where the spatial null is beaten). b: the
-    genes the second view predicts best, with the first view's R^2 marked."""
+    """a: every gene's R^2 from two views, coloured by which views beat the per-gene spatial
+    null (both / only one / neither). b: the genes the second view predicts best, with the
+    first view's R^2 marked."""
+    from .relevance import gene_category
+
     g = rel.get("genes")
     if g is None or f"r2_{x_view}" not in g or f"r2_{y_view}" not in g:
         return None
     x, y = g[f"r2_{x_view}"].to_numpy(float), g[f"r2_{y_view}"].to_numpy(float)
     qy = g.get(f"q_{y_view}", pd.Series(np.nan, index=g.index)).to_numpy(float)
     qx = g.get(f"q_{x_view}", pd.Series(np.nan, index=g.index)).to_numpy(float)
-    grey, cy, cx = (205, 205, 205), VIEW_COLOURS.get(y_view, (213, 94, 0)), VIEW_COLOURS.get(x_view, (0, 114, 178))
-    colours = [cy if qy[i] < 0.05 else (cx if qx[i] < 0.05 else grey) for i in range(len(g))]
+    cat = gene_category(qx, qy)
+    colours = [GENE_CATEGORY_COLOURS[c] for c in cat]
+    counts = {c: int((cat == c).sum()) for c in GENE_CATEGORY_COLOURS}
     names = g["gene_name"].astype(str).to_numpy()
     top_y = list(np.argsort(-np.nan_to_num(y, nan=-9))[:n_labels])
     adds = g.get(f"adds_{y_view}_to_{x_view}")
@@ -632,8 +659,10 @@ def relevance_genes_figure(rel: dict, caption: dict, prefix: str, x_view: str = 
     lo = max(-0.2, float(np.nanmin(np.r_[x, y, 0.0])))
     a = figures.scatter_chart(x, y, colours, f"R2 of the gene from {x_view}", f"R2 of the gene from {y_view}",
                               size=(620, 560), x_range=(lo, hi + 0.05), y_range=(lo, hi + 0.05), labels=labels)
-    items = [(cy, f"beats the spatial null from {y_view} (q < 0.05)"),
-             (cx, f"beats it only from {x_view}"), (grey, "neither")]
+    items = [(GENE_CATEGORY_COLOURS["both"], f"beats the null from both ({counts['both']})"),
+             (GENE_CATEGORY_COLOURS["only_y"], f"only from {y_view} ({counts['only_y']})"),
+             (GENE_CATEGORY_COLOURS["only_x"], f"only from {x_view} ({counts['only_x']})"),
+             (GENE_CATEGORY_COLOURS["neither"], f"from neither ({counts['neither']})")]
     left = figures.stack([figures.title_strip(620, f"a. Every gene: from {x_view} and from {y_view}", 14), a,
                           figures.legend(items, width=620)])
     rows = []
@@ -641,11 +670,220 @@ def relevance_genes_figure(rel: dict, caption: dict, prefix: str, x_view: str = 
         t = f"{x_view} {x[i]:.2f}"
         if "r2_INTENSITY_HE" in g:
             t += f" | INTENSITY_HE {g['r2_INTENSITY_HE'].iloc[i]:.2f}"
-        rows.append({"label": names[i], "segments": [(y[i], cy)], "marker": x[i], "text": t})
+        if "reliability" in g and np.isfinite(g["reliability"].iloc[i]):
+            t += f" | reliability {g['reliability'].iloc[i]:.2f}"
+        rows.append({"label": names[i], "segments": [(y[i], GENE_CATEGORY_COLOURS[cat[i]])], "marker": x[i], "text": t})
     top_x = float(np.ceil(max(hi, 0.2) * 10) / 10)
     b = figures.hbar_chart(rows, f"R2 from {y_view} (black tick: from {x_view})", x_range=(min(0.0, lo), top_x),
-                           width=760)
+                           width=860)
     right = figures.stack([figures.title_strip(640, f"b. Genes best predicted from {y_view}", 14), b])
     body = _side_by_side([left, right])
     return figures.with_caption(body, title=f"Which genes the image predicts - {prefix}, set 'keep' ({len(g)} genes)",
                                 min_width=1200, **caption)
+
+
+PARTITION_COLOURS = {"only_a": (0, 114, 178), "shared": (150, 150, 150), "only_b": (213, 94, 0)}
+
+
+def gene_partition_figure(gp: pd.DataFrame, caption: dict, prefix: str, view_a: str = "UNI2H_RGB",
+                          view_b: str = "LBP_RGB", n_top: int = 25) -> Image.Image | None:
+    """a: for the genes best predicted from both views together, R^2(A+B) split into only A,
+    shared and only B. b: the same parts summed over the genes that beat the spatial null
+    from at least one view."""
+    if gp is None or gp.empty:
+        return None
+    t = gp[(gp["view_a"] == view_a) & (gp["view_b"] == view_b)].reset_index(drop=True)
+    if t.empty:
+        return None
+    ca = VIEW_COLOURS.get(view_a, PARTITION_COLOURS["only_a"])
+    cb = VIEW_COLOURS.get(view_b, PARTITION_COLOURS["only_b"])
+    order = np.argsort(-np.nan_to_num(t["r2_ab"].to_numpy(float), nan=-9))[:n_top]
+    rows = []
+    for i in order:
+        r = t.iloc[i]
+        rel = r["reliability"] if np.isfinite(r.get("reliability", np.nan)) else np.nan
+        text = f"A {r['only_a']:.2f} | both {r['shared']:.2f} | B {r['only_b']:.2f}"
+        if np.isfinite(rel):
+            text += f" | reliability {rel:.2f}"
+        rows.append({"label": str(r["gene_name"]),
+                     "segments": [(max(r["only_a"], 0.0), ca), (max(r["shared"], 0.0), PARTITION_COLOURS["shared"]),
+                                  (max(r["only_b"], 0.0), cb)],
+                     "marker": rel, "text": text})
+    top_x = float(np.ceil(max(float(np.nanmax(t["r2_ab"])), 0.2) * 10) / 10)
+    a = figures.hbar_chart(rows, f"R2 of the gene from {view_a} + {view_b}, split (black tick: reliability)",
+                           x_range=(0.0, min(1.0, max(top_x, 0.2))), width=980)
+    sig = (t["q_a"] < 0.05) | (t["q_b"] < 0.05)
+    s = t[sig] if sig.any() else t
+    pos = s[["only_a", "shared", "only_b"]].clip(lower=0).sum()
+    total = float(pos.sum())
+    shares = (pos / total) if total > 0 else pos * np.nan
+    b_rows = [{"label": f"{len(s)} genes", "segments": [(shares["only_a"], ca),
+                                                         (shares["shared"], PARTITION_COLOURS["shared"]),
+                                                         (shares["only_b"], cb)],
+               "text": f"only {view_a} {shares['only_a']:.0%} | both {shares['shared']:.0%} | only {view_b} "
+                       f"{shares['only_b']:.0%}"}]
+    b = figures.hbar_chart(b_rows, "share of the summed R2 (parts below 0 counted as 0)", x_range=(0.0, 1.0), width=980)
+    items = [(ca, f"only {view_a}: R2(A+B) - R2(B)"), (PARTITION_COLOURS["shared"], "both: R2(A) + R2(B) - R2(A+B)"),
+             (cb, f"only {view_b}: R2(A+B) - R2(A)")]
+    which = "that beat the spatial null from at least one view" if sig.any() else "(none beats the null: all genes)"
+    body = figures.stack([figures.title_strip(980, f"a. The {len(order)} genes best predicted from both together", 14), a,
+                          figures.title_strip(980, f"b. Summed over the genes {which}", 14), b,
+                          figures.legend(items, width=980)])
+    return figures.with_caption(body, title=f"What each view predicts of every gene - {prefix}, set 'keep'", min_width=1000,
+                                **caption)
+
+
+def markers_figure(markers: pd.DataFrame, f1: pd.DataFrame, info: dict, methods: list[str], caption: dict,
+                   prefix: str, n_genes: int = 8) -> Image.Image | None:
+    """Per method at the k shown: one row per expression domain with its size, the F1 of
+    every image view for it and its best marker genes (AUROC)."""
+    if markers is None or markers.empty:
+        return None
+    ref = info.get("reference_view", "EXPRESSION")
+    views = [v for v in info.get("views_clustered", []) if v != ref]
+    f_head, f_cell, f_small = figures.font(13), figures.font(13), figures.font(12)
+    panels = []
+    for m in methods:
+        k = (info.get("k_show") or {}).get(m, info.get("k_ref"))
+        t = markers[(markers["method"] == m) & (markers["k"] == k)]
+        if t.empty:
+            continue
+        fk = f1[(f1["method"] == m) & (f1["k"] == k) & (f1["set"] == "keep")] if f1 is not None and len(f1) else f1
+        domains = sorted(t["domain"].unique())
+        cell, row_h, lw = 56, 30, 150
+        probe = ImageDraw.Draw(Image.new("RGB", (1, 1)))
+        texts = {}
+        for d in domains:
+            g = t[t["domain"] == d].sort_values("rank").head(n_genes)
+            texts[d] = ", ".join(f"{r.gene_name} ({r.auroc:.2f})" for r in g.itertuples(index=False))
+        tw = int(max([text_width(probe, plain(s), f_small) for s in texts.values()] + [200])) + 20
+        head_h = int(max([text_width(probe, plain(v), f_small) for v in views] + [40])) + 12
+        W = lw + len(views) * cell + tw + 20
+        H = 30 + head_h + len(domains) * row_h + 10
+        img = Image.new("RGB", (W, H), BG)
+        draw = ImageDraw.Draw(img)
+        name = "Leiden" if m == "leiden" else "k-means"
+        draw.text((6, 4), plain(f"{name}, k = {k}: the {ref} domains, how well each view finds them, their markers"),
+                  font=f_head, fill=INK)
+        top = 30 + head_h
+        for j, v in enumerate(views):
+            lab = vertical_text(v, f_small, VIEW_COLOURS.get(v, INK))
+            img.paste(lab, (lw + j * cell + (cell - lab.width) // 2, top - lab.height - 4))
+        draw.text((lw + len(views) * cell + 10, top - 20), "best markers (AUROC)", font=f_small, fill=INK)
+        for i, d in enumerate(domains):
+            y = top + i * row_h
+            n_in = int(t[t["domain"] == d]["n_in"].iloc[0])
+            draw.rectangle([6, y + 8, 20, y + 22], fill=cluster_colour(d))
+            draw.text((26, y + 7), plain(f"domain {d} ({n_in})"), font=f_cell, fill=INK)
+            for j, v in enumerate(views):
+                val = np.nan
+                if fk is not None and len(fk):
+                    hit = fk[(fk["view"] == v) & (fk["domain"] == d)]
+                    if len(hit):
+                        val = float(hit["f1"].iloc[0])
+                x = lw + j * cell
+                draw.rectangle([x, y + 2, x + cell - 3, y + row_h - 3], fill=scale_colour(val))
+                if np.isfinite(val):
+                    _centred(draw, x, y + 2, cell - 3, row_h - 5, f"{val:.2f}", f_small,
+                             (255, 255, 255) if val > 0.55 else INK)
+            draw.text((lw + len(views) * cell + 10, y + 8), plain(texts[d]), font=f_small, fill=INK)
+        panels.append(img)
+    if not panels:
+        return None
+    body = figures.stack(panels + [colour_bar(label="F1")])
+    return figures.with_caption(body, title=f"What the expression domains are, and which views find them - {prefix}",
+                                min_width=1000, **caption)
+
+
+def diverging_colour(v: float, top: float) -> tuple[int, int, int]:
+    """Blue (negative) - white (0) - red (positive), saturated at +-top."""
+    if not np.isfinite(v):
+        return (240, 240, 240)
+    t = float(np.clip(v / top, -1, 1))
+    end = (178, 24, 43) if t > 0 else (33, 102, 172)
+    return tuple(int(round(255 + abs(t) * (end[c] - 255))) for c in range(3))
+
+
+def texture_genes_figure(table: pd.DataFrame, summary: pd.DataFrame, caption: dict, prefix: str, n_genes: int = 30,
+                         level: float = 0.05, title: str | None = None, count_label: str | None = None,
+                         dot_label: str | None = None) -> Image.Image | None:
+    """a: partial Spearman correlation of the genes most associated with texture (rows) with
+    every texture feature (columns: type, then radius); a dot where q < level. b: per type
+    and radius, the number of genes with q < level."""
+    if table is None or table.empty:
+        return None
+    feats = list(dict.fromkeys(table["feature"]))
+    ft = table.drop_duplicates("feature").set_index("feature").loc[feats]
+    sig = table[table["q"] < level]
+    pool = sig if len(sig) else table
+    best = pool.assign(a=pool["rho"].abs()).sort_values("a", ascending=False).drop_duplicates("gene_id")
+    genes = best["gene_id"].head(n_genes).tolist()
+    if not genes:
+        return None
+    name_of = dict(zip(table["gene_id"], table["gene_name"]))
+    sub = table[table["gene_id"].isin(genes)]
+    rho = sub.pivot_table(index="gene_id", columns="feature", values="rho").reindex(index=genes, columns=feats)
+    qv = sub.pivot_table(index="gene_id", columns="feature", values="q").reindex(index=genes, columns=feats)
+    # order genes by their profile (largest correlation with spot features first, then edge...)
+    order = np.argsort(-np.nan_to_num(rho.to_numpy(float)).mean(axis=1))
+    rho, qv = rho.iloc[order], qv.iloc[order]
+    top = max(0.1, float(np.nanpercentile(np.abs(rho.to_numpy(float)), 98)))
+    cw, ch = 16, 16
+    f_lab, f_small, f_title = figures.font(12), figures.font(11), figures.font(14)
+    probe = ImageDraw.Draw(Image.new("RGB", (1, 1)))
+    lw = int(max(text_width(probe, plain(str(name_of[g])), f_lab) for g in rho.index)) + 14
+    head = 60
+    title_a = "a. Partial Spearman correlation of each gene with each texture feature"
+    W = max(lw + len(feats) * cw + 20, int(text_width(probe, plain(title_a), f_title)) + 20, lw + 560)
+    H = 30 + head + len(rho) * ch + 40
+    img = Image.new("RGB", (W, H), BG)
+    draw = ImageDraw.Draw(img)
+    draw.text((6, 4), plain(title_a), font=f_title, fill=INK)
+    y0 = 30 + head
+    types = list(dict.fromkeys(ft["type"]))
+    for t in types:
+        cols = [i for i, f in enumerate(feats) if ft.loc[f, "type"] == t]
+        x_a, x_b = lw + cols[0] * cw, lw + (cols[-1] + 1) * cw
+        draw.line([(x_a + 2, 30 + 18), (x_b - 2, 30 + 18)], fill=INK, width=2)
+        draw.text((x_a + 2, 30), plain(t.replace("_", " ")), font=f_small, fill=INK)
+        for i in cols:
+            r = int(ft.loc[feats[i], "radius_px"])
+            lab = vertical_text(str(r), f_small, MUTED)
+            img.paste(lab, (lw + i * cw + (cw - lab.width) // 2, y0 - lab.height - 3))
+    for a, g in enumerate(rho.index):
+        y = y0 + a * ch
+        draw.text((lw - 6 - text_width(draw, plain(str(name_of[g])), f_lab), y + 1), plain(str(name_of[g])), font=f_lab,
+                  fill=INK)
+        for i, f in enumerate(feats):
+            v = rho.iloc[a, i]
+            x = lw + i * cw
+            draw.rectangle([x, y, x + cw - 2, y + ch - 2], fill=diverging_colour(v, top))
+            if np.isfinite(qv.iloc[a, i]) and qv.iloc[a, i] < level:
+                draw.ellipse([x + cw / 2 - 3, y + ch / 2 - 3, x + cw / 2 + 2, y + ch / 2 + 2], fill=INK)
+    yb = y0 + len(rho) * ch + 8
+    for i in range(160):
+        v = -top + 2 * top * i / 159
+        draw.line([(lw + i, yb), (lw + i, yb + 10)], fill=diverging_colour(v, top))
+    draw.text((lw - 40, yb - 2), f"{-top:.2f}", font=f_small, fill=MUTED)
+    draw.text((lw + 166, yb - 2), f"{top:.2f}   rho (columns: radius in px); dot: {dot_label or f'q < {level:g}'}",
+              font=f_small, fill=MUTED)
+    panels = [img]
+    if summary is not None and len(summary):
+        series = []
+        colours = {"spot_bright": (230, 159, 0), "spot_dark_or_flat": (0, 0, 0), "edge": (0, 114, 178),
+                   "irregular": (204, 121, 167)}
+        for t in types:
+            s = summary[summary["type"] == t].sort_values("radius_px")
+            series.append({"name": t, "x": s["radius_px"].to_numpy(float), "y": s["n_sig"].to_numpy(float),
+                           "colour": colours.get(t, figures.SERIES[len(series) % len(figures.SERIES)])})
+        ymax = float(np.ceil(max(5, summary["n_sig"].max()) / 5) * 5)
+        chart = figures.line_chart(series, "LBP radius (px, log scale)", count_label or f"genes with q < {level:g}",
+                                   size=(560, 320), y_range=(0.0, ymax), log_x=True,
+                                   x_ticks=sorted(summary["radius_px"].unique().tolist()))
+        items = [(s["colour"], s["name"].replace("_", " ")) for s in series]
+        panels.append(figures.stack([figures.title_strip(560, "b. How many genes go with each feature", 14), chart,
+                                     figures.legend(items, width=560)]))
+    body = _side_by_side(panels)
+    if title is None:
+        title = f"Which texture goes with which gene - {prefix}, set 'keep' ({int(table['n_tiles'].iloc[0])} tiles)"
+    return figures.with_caption(body, title=title, min_width=1100, **caption)

@@ -79,10 +79,25 @@ Since 0.6.0 `redundancy.tsv` also has `r2_fold_min`, `r2_fold_max`, `r2_fold_sd`
 
 With `--relevance` (set `keep`; method in [design.md](design.md#optional-relevance-what-the-image-predicts-of-the-expression---relevance)):
 
-* `<id>.relevance.tsv`: one row per predictor (`kind` = `view`, or `joint` for two views side by side, named `<a>+<b>`): `r2` of the expression's principal components, `r2_pc1`, `r2_ci_low`, `r2_ci_high`, `r2_fold_sd` and, for single views, the spatial null (`r2_null_mean`, `r2_null_p95`, `p_null`).
+* `<id>.relevance.tsv`: one row per predictor (`kind` = `view`, or `joint` for two views side by side, named `<a>+<b>`): `r2` of the expression's principal components, `r2_pc1` … `r2_pc5` (each component on its own), `r2_ci_low`, `r2_ci_high`, `r2_fold_sd`, for single views the spatial null (`r2_null_mean`, `r2_null_p95`, `p_null`), and the split-half noise ceiling: `r2_half` (half B's components from the view), `r2_ceiling` (from half A) and `fraction` = `r2_half` / `r2_ceiling`, the share of the reachable.
 * `<id>.relevance_partition.tsv`: per pair of views A, B: `r2_a`, `r2_b`, `r2_ab`, `unique_a` (= `r2_ab` − `r2_b`), `unique_b`, `shared`.
-* `<id>.relevance_genes.tsv.gz`: per gene (`gene_id`, `gene_name`): `r2_<view>` for every gene view, its null (`r2_null_mean_<view>`, `r2_null_sd_<view>`), `z_<view>`, `p_<view>` (one-sided, normal) and `q_<view>` (Benjamini–Hochberg); `r2_<a>+<b>` and `adds_<b>_to_<a>` for UNI2-h + LBP and INTENSITY_HE + LBP.
-* `<id>.relevance_keep.png`, `<id>.relevance_genes_keep.png`: the figures.
+* `<id>.relevance_genes.tsv.gz`: per gene (`gene_id`, `gene_name`): `split_half_r` and `reliability` (Spearman–Brown, roughly the largest R² its sampling noise allows); `r2_<view>` for every gene view, its null (`r2_null_mean_<view>`, `r2_null_sd_<view>`, `r2_null_p95_<view>`), `z_<view>` (for ranking), `p_<view>` (empirical, one-sided: (1 + moves reaching the real R²) / (1 + moves)) and `q_<view>` (Benjamini–Hochberg); `r2_<a>+<b>` and `adds_<b>_to_<a>` for UNI2-h + LBP and INTENSITY_HE + LBP.
+* `<id>.relevance_gene_partition.tsv.gz`: per gene and pair (UNI2H_RGB + LBP_RGB, INTENSITY_HE + LBP_RGB): `r2_a`, `r2_b`, `r2_ab`, `only_a`, `only_b`, `shared`, the q-values of both views and the reliability.
+* `<id>.relevance_keep.png`, `<id>.relevance_genes_keep.png` (genes coloured by which views beat the null: both, only LBP, only UNI2-h, neither), `<id>.relevance_gene_partition_keep.png`: the figures.
+
+With `--markers` (set `keep`):
+
+* `<id>.markers.tsv.gz`: per method, k and expression domain, its best `--markers_top` genes: `auroc`, `log2fc`, `pct_in`, `pct_out`, `mean_in`, `mean_out` (counts per 10 000), the domain's size (`n_in`) and `rank`.
+* `<id>.markers_domains.tsv`: per method, k and domain, its size and the F1 of every image view (`f1_<view>`).
+* `<id>.cluster_markers_keep.png`: at the k shown, one row per domain with the F1 of every view and its best markers.
+
+With `--texture_genes` (set `keep`):
+
+* `<id>.texture_genes.tsv.gz`: per texture feature (`feature` = `<type>_r<radius>`, `type`, `radius_px`) and gene: `rho` (partial Spearman, depth removed), `n_tiles`, `n_eff` (effective number of tiles of the modified t-test), `p`, `q`.
+* `<id>.texture_genes_summary.tsv`: per feature, the genes with q < 0.05 (positive, negative) and the strongest gene.
+* `<id>.texture_genes_keep.png`: the figure.
+
+With `--expression_thin_to`, `cluster.json` records the thinning (`expression_thinning`: target, probability, median depth before and after), and every figure's caption says so.
 
 ## `<sample>/mpp<scale>/gallery/` — typical tiles (with `--cluster`, `--cluster_gallery`)
 
@@ -99,9 +114,13 @@ With `--relevance` (set `keep`; method in [design.md](design.md#optional-relevan
 * `cohort_mpp<scale>.long.tsv.gz`: one row per slide, analysis (`agreement`, `f1`, `stability`, `redundancy`, `relevance`, `relevance_partition`), set, method, k, views `a` and `b`, `metric` and `value`, with the samplesheet metadata.
 * `cohort_mpp<scale>.key.tsv`: one row per slide and image view: ARI and corrected ARI averaged over k and at the k shown (k-means and Leiden), macro-F1 averaged over k, stability, relevance R², and the metadata.
 * `cohort_mpp<scale>.groups.tsv`: with a grouping column (`--cohort_group`): every key number per group (patients averaged), the test used (paired Wilcoxon, Mann–Whitney or Kruskal–Wallis) and its p-value.
-* `cohort_mpp<scale>.genes.tsv.gz`: every gene's R² from each view, mean over the slides and number of slides.
+* `cohort_mpp<scale>.ari_by_k.tsv`: per method, view and k, the raw and corrected ARI with EXPRESSION over the slides (mean, median, lowest, highest, slides) and `best_k` (largest median corrected ARI).
+* `cohort_mpp<scale>.genes.tsv.gz`: every gene's R² from each view, mean over the slides, the number of slides, in how many it beats the null from each view (q < 0.05) and its mean reliability.
+* `cohort_mpp<scale>.gene_partition.tsv`: per slide and pair of views, the parts of R²(A+B) summed over the genes that beat the null (and over all genes) and their shares.
+* `cohort_mpp<scale>.domains.tsv` (with `--markers`): per slide and method, the expression domains at the k shown with the F1 of every view and their best markers, to name the domains across slides.
+* `cohort_mpp<scale>.texture_genes.tsv.gz` (with `--texture_genes`): per feature and gene, the slides tested, the median rho and the slides with q < 0.05 of each sign.
 * `cohort_mpp<scale>.patch_sweep.tsv`: the patch sweeps of every slide (when run).
-* figures (`agreement`, `ari_by_k`, `f1`, `redundancy`, `relevance`, `groups`, `patch_sweep`) and `cohort_mpp<scale>.report.html`, one page with every figure, the key table and links to every slide's figures.
+* figures (`agreement`, `ari_by_k`, `ari_by_k_corrected`, `stability`, `f1`, `redundancy`, `relevance`, `gene_partition`, `texture_genes`, `groups`, `patch_sweep`) and `cohort_mpp<scale>.report.html`, one page with every figure, the key table, the expression domains and links to every slide's figures.
 
 ## `export/mpp<scale>/`
 

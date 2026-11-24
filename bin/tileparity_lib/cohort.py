@@ -25,6 +25,8 @@ import numpy as np
 import pandas as pd
 
 LONG_COLUMNS = ["sample", "analysis", "set", "method", "k", "a", "b", "metric", "value"]
+RELEVANCE_METRICS = ("r2", "r2_ci_low", "r2_ci_high", "r2_null_p95", "r2_pc1", "r2_pc2", "r2_pc3", "r2_pc4", "r2_pc5",
+                     "r2_half", "r2_ceiling", "fraction")
 
 
 def _read(path: Path) -> pd.DataFrame | None:
@@ -49,8 +51,11 @@ def load(directory: str | Path, prefix: str) -> dict:
                         ("redundancy", "redundancy.tsv"), ("relevance", "relevance.tsv"),
                         ("partition", "relevance_partition.tsv")):
         out[key] = _read(d / f"{prefix}.{suffix}")
-    genes = d / f"{prefix}.relevance_genes.tsv.gz"
-    out["genes"] = pd.read_csv(genes, sep="\t") if genes.exists() else None
+    for key, suffix in (("genes", "relevance_genes.tsv.gz"), ("gene_partition", "relevance_gene_partition.tsv.gz"),
+                        ("domains", "markers_domains.tsv"), ("markers", "markers.tsv.gz"),
+                        ("texture", "texture_genes.tsv.gz")):
+        path = d / f"{prefix}.{suffix}"
+        out[key] = _read(path) if path.exists() else None
     out["info"] = json.loads((d / f"{prefix}.cluster.json").read_text())
     return out
 
@@ -96,7 +101,7 @@ def long_table(slides: list[dict]) -> pd.DataFrame:
                                                "value": r[metric]}))
         rel = sl.get("relevance")
         if rel is not None and len(rel):
-            for metric in ("r2", "r2_ci_low", "r2_ci_high", "r2_null_p95"):
+            for metric in [c for c in RELEVANCE_METRICS if c in rel]:
                 parts.append(pd.DataFrame({"sample": s, "analysis": "relevance", "set": rel["set"], "method": "",
                                            "k": np.nan, "a": rel["predictor"], "b": "EXPRESSION", "metric": metric,
                                            "value": rel[metric]}))
@@ -147,6 +152,9 @@ def key_table(slides: list[dict]) -> pd.DataFrame:
                 if len(t):
                     row["relevance_r2"] = t["r2"].iloc[0]
                     row["relevance_r2_null_p95"] = t["r2_null_p95"].iloc[0]
+                    for c, name in (("r2_pc1", "relevance_r2_pc1"), ("fraction", "relevance_fraction")):
+                        if c in t:
+                            row[name] = t[c].iloc[0]
             rows.append(row)
     return pd.DataFrame(rows) if rows else pd.DataFrame(columns=["sample", "view", "reference"])
 
@@ -154,7 +162,111 @@ def key_table(slides: list[dict]) -> pd.DataFrame:
 KEY_METRICS = {"ari_corrected_mean_k_kmeans": "corrected ARI with expression, mean over k (k-means)",
                "ari_corrected_mean_k_leiden": "corrected ARI with expression, mean over k (Leiden)",
                "macro_f1_mean_k_kmeans": "macro-F1, mean over k (k-means)",
-               "relevance_r2": "R2 of the expression from the view"}
+               "relevance_r2": "R2 of the expression from the view",
+               "relevance_fraction": "share of the reachable expression predicted from the view"}
+
+
+# ---- 0.7.0: corrected ARI by k, genes, domains, texture across slides ------------------------------------------------
+def ari_by_k(long: pd.DataFrame, ref: str) -> pd.DataFrame:
+    """Per method, view and k: raw and corrected ARI with ``ref`` over the slides (mean,
+    median, lowest, highest, slides), and whether k is the best k of the view (largest median
+    corrected ARI)."""
+    t = long[(long["analysis"] == "agreement") & long["metric"].isin(["ari", "ari_corrected"]) &
+             (long["set"] == "keep") & ((long["a"] == ref) | (long["b"] == ref))]
+    if t.empty:
+        return pd.DataFrame()
+    t = t.assign(view=np.where(t["a"] == ref, t["b"], t["a"]))
+    t = t[~t["view"].astype(str).str.contains(r"\.", regex=True)]
+    g = t.groupby(["method", "view", "k", "metric"])["value"]
+    out = g.agg(mean="mean", median="median", lowest="min", highest="max", slides="count").reset_index()
+    wide = out.pivot_table(index=["method", "view", "k"], columns="metric",
+                           values=["mean", "median", "lowest", "highest", "slides"])
+    wide.columns = [f"{m}_{s}" for s, m in wide.columns]
+    order = [f"{m}_{s}" for m in ("ari", "ari_corrected") for s in ("mean", "median", "lowest", "highest", "slides")]
+    wide = wide[[c for c in order if c in wide.columns]].reset_index()
+    if "ari_corrected_median" in wide:
+        ok = wide.dropna(subset=["ari_corrected_median"])
+        best = ok.loc[ok.groupby(["method", "view"])["ari_corrected_median"].idxmax(), ["method", "view", "k"]]
+        wide["best_k"] = wide.set_index(["method", "view", "k"]).index.isin(best.set_index(["method", "view", "k"]).index)
+    return wide
+
+
+def gene_table(slides: list[dict], level: float = 0.05) -> pd.DataFrame:
+    """Per gene: mean R2 from every view over the slides where it was tested, in how many
+    slides, and in how many it beats the spatial null (q < level)."""
+    parts = [s["genes"].assign(sample=sample_name(s)) for s in slides if s.get("genes") is not None]
+    if not parts:
+        return pd.DataFrame()
+    g = pd.concat(parts, ignore_index=True)
+    r2cols = [c for c in g.columns if c.startswith("r2_") and "null" not in c]
+    agg = g.groupby(["gene_id", "gene_name"])[r2cols].mean()
+    agg.columns = [f"{c}_mean" for c in agg.columns]
+    agg["slides"] = g.groupby(["gene_id", "gene_name"]).size()
+    for c in [c for c in g.columns if c.startswith("q_")]:
+        agg[f"slides_{c[2:]}_q{str(level)[2:]}"] = g.assign(_s=g[c] < level).groupby(["gene_id", "gene_name"])["_s"].sum()
+    if "reliability" in g:
+        agg["reliability_mean"] = g.groupby(["gene_id", "gene_name"])["reliability"].mean()
+    return agg.reset_index().sort_values(agg.columns[0] if len(agg.columns) else "gene_id", ascending=False)
+
+
+def gene_partition_table(slides: list[dict], level: float = 0.05) -> pd.DataFrame:
+    """Per slide and pair of views: the parts of R2(A+B) (only A, both, only B; below 0
+    counted as 0) summed over the genes that beat the spatial null from at least one view,
+    and their shares."""
+    rows = []
+    for s in slides:
+        gp = s.get("gene_partition")
+        if gp is None or gp.empty:
+            continue
+        for (a, b), t in gp.groupby(["view_a", "view_b"], sort=False):
+            sig = (t["q_a"] < level) | (t["q_b"] < level)
+            row = {"sample": sample_name(s), "view_a": a, "view_b": b, "n_genes": len(t), "n_genes_sig": int(sig.sum())}
+            for suffix, u in (("", t[sig]), ("_all_genes", t)):
+                pos = u[["only_a", "shared", "only_b"]].clip(lower=0).sum()
+                tot = float(pos.sum())
+                for part in ("only_a", "shared", "only_b"):
+                    row[f"sum_{part}{suffix}"] = pos[part]
+                    row[f"share_{part}{suffix}"] = pos[part] / tot if tot > 0 else np.nan
+            rows.append(row)
+    return pd.DataFrame(rows)
+
+
+def domains_table(slides: list[dict], n_markers: int = 10) -> pd.DataFrame:
+    """Per slide, method (at its k shown) and expression domain: its size, the F1 of every
+    image view and its best markers, to name the domains across slides."""
+    rows = []
+    for s in slides:
+        dom, mk = s.get("domains"), s.get("markers")
+        if dom is None or dom.empty or mk is None or mk.empty:
+            continue
+        info = s["info"].get("sets", {}).get("keep", {})
+        for m, k in (info.get("k_show") or {}).items():
+            d = dom[(dom["method"] == m) & (dom["k"] == k)]
+            for r in d.to_dict("records"):
+                g = mk[(mk["method"] == m) & (mk["k"] == k) & (mk["domain"] == r["domain"])].sort_values("rank")
+                r = {"sample": sample_name(s), **r,
+                     "markers": ", ".join(f"{x.gene_name} ({x.auroc:.2f})" for x in g.head(n_markers).itertuples())}
+                rows.append(r)
+    return pd.DataFrame(rows)
+
+
+def texture_replication(slides: list[dict], level: float = 0.05) -> pd.DataFrame:
+    """Per texture feature and gene: in how many slides it was tested, its median partial
+    Spearman rho, and in how many slides it reaches q < level with a positive and with a
+    negative rho."""
+    parts = [s["texture"].assign(sample=sample_name(s)) for s in slides if s.get("texture") is not None]
+    parts = [p for p in parts if len(p)]
+    if not parts:
+        return pd.DataFrame()
+    t = pd.concat(parts, ignore_index=True)
+    t["sig_pos"] = (t["q"] < level) & (t["rho"] > 0)
+    t["sig_neg"] = (t["q"] < level) & (t["rho"] < 0)
+    g = t.groupby(["feature", "type", "radius_px", "gene_id", "gene_name"], sort=False)
+    out = g.agg(slides=("rho", "count"), rho_median=("rho", "median"), slides_sig_pos=("sig_pos", "sum"),
+                slides_sig_neg=("sig_neg", "sum"), n_eff_median=("n_eff", "median")).reset_index()
+    out["slides_sig_same_sign"] = np.where(out["rho_median"] >= 0, out["slides_sig_pos"], out["slides_sig_neg"])
+    return out.sort_values(["slides_sig_same_sign", "rho_median"], ascending=[False, False], key=lambda c: c.abs()
+                           if c.name == "rho_median" else c)
 
 
 def patient_level(key: pd.DataFrame, meta: pd.DataFrame, group: str, pair: str | None) -> pd.DataFrame:

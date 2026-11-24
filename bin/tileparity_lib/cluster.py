@@ -112,6 +112,36 @@ def counts_per_unit(sample: dict) -> np.ndarray | None:
         return np.where(units > 0, totals / units, np.nan)
 
 
+def thin_counts(sample: dict, target: float, seed: int) -> dict:
+    """Thin the sample's counts in place (``--expression-thin-to``): every molecule is kept
+    with the same probability p = target / median molecules per tile of the keep tiles, so
+    the keep tiles' median depth becomes about ``target`` and the differences in depth
+    between tiles stay. Simulates a shallower experiment on the same tissue. No change when
+    the median is already at or below the target. Returns what was done."""
+    from scipy import sparse
+
+    Y = sparse.csc_matrix(sample["counts"])
+    if Y.shape[0] == 0 or target <= 0:
+        return {"applied": False, "reason": "no expression" if Y.shape[0] == 0 else "off"}
+    totals = np.asarray(Y.sum(axis=0)).ravel().astype(float)
+    keep = sample["tiles"]["keep"].to_numpy(bool)
+    median = float(np.median(totals[keep])) if keep.any() else float(np.median(totals))
+    info = {"target_molecules_per_tile": float(target), "median_before": median, "seed": int(seed)}
+    if not median > target:
+        info.update({"applied": False, "reason": "the median is already at or below the target"})
+        return info
+    p = target / median
+    rng = np.random.default_rng(seed + 7919)
+    T = Y.copy()
+    T.data = rng.binomial(np.round(T.data).astype(np.int64), p).astype(Y.dtype)
+    T.eliminate_zeros()
+    sample["counts"] = T
+    after = np.asarray(T.sum(axis=0)).ravel().astype(float)
+    info.update({"applied": True, "probability": p,
+                 "median_after": float(np.median(after[keep])) if keep.any() else float(np.median(after))})
+    return info
+
+
 def tile_sets(sample: dict, min_counts_ratio: float) -> tuple[dict, dict]:
     """Boolean masks over the sample's extracted tiles for the ``keep`` and ``extended``
     sets, and how they were made."""

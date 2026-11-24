@@ -134,6 +134,9 @@ Parameters come in three levels (the same sections in [`nextflow.config`](nextfl
 | `--cluster` | `false` | cluster every view of every slide on its own and measure how much the views agree: ARI with its spatial null and the corrected ARI, F1 per expression domain, stability under subsampling, at every k and averaged over k; the figures show, per method, the k at which the image views agree best with expression (`--cluster_k_ref auto`). With it, by default: tile galleries per cluster (`--cluster_gallery`) and one cohort summary per scale with every slide (`--cohort_summary`, groups from `--cohort_group`, unit `--cohort_pair`). Details in [docs/usage.md](docs/usage.md) |
 | `--redundancy` | `false` | with `--cluster`: how much of each image view the other views predict (cross-validated ridge regression between their principal components, with a 95 % interval and a spatial null): redundant and view-specific information |
 | `--relevance` | `false` | with `--cluster`: how much of the expression each image view predicts, what each view adds to another (variance partitioning), and which genes the image predicts (gene-level R2 with a spatial null) |
+| `--markers` | `false` | with `--cluster`: the marker genes of every expression domain (AUROC, fold change), next to the F1 of every image view for that domain: what the domains a view finds or misses are |
+| `--texture_genes` | `false` | with `--cluster`: 52 named LBP texture features (bright spots, dark spots or flat areas, edges, irregular patterns at 13 radii) against the most variable genes, partial Spearman with depth removed and a test corrected for spatial autocorrelation |
+| `--expression_thin_to` | `0` | with `--cluster`: thin the counts to this median number of molecules per tile before the analyses (sensitivity to sequencing depth) |
 | `--patch_sweep` | `false` | Visium HD slides: what LBP predicts of the expression on patches of 16 to 224 µm (LBP counted once per 8 µm cell and summed), with a split-half noise ceiling, to find the patch size and radii at which texture says most |
 
 **Diagnostics**
@@ -153,7 +156,7 @@ results/
 ├── <sample>/mpp<scale>/uni2h/     <id>.uni2h.h5      (Output2a)
 ├── <sample>/mpp<scale>/lbp/       <id>.lbp.h5        (Output2b), lbp_qc.png
 ├── <sample>/mpp<scale>/st/        <id>.counts.h5     (Output3), per-tile summary
-├── <sample>/mpp<scale>/cluster/   [clusters of every view, agreement, F1, stability, figures; redundancy; relevance]
+├── <sample>/mpp<scale>/cluster/   [clusters of every view, agreement, F1, stability, figures; redundancy; relevance; markers; texture_genes]
 ├── <sample>/mpp<scale>/gallery/   [typical tiles of every cluster and principal component, one figure per view]
 ├── <sample>/mpp<scale>/patch_sweep/ [LBP and expression by patch size, Visium HD]
 ├── cohort/mpp<scale>/             [every slide together: long table, key numbers, group comparisons, figures, report.html]
@@ -182,14 +185,14 @@ A new extractor is one module that reads `[meta, resampled.tif, tiles.tsv.gz, pr
 
 ## Status and roadmap
 
-Version 0.6.0 (changes in [CHANGELOG.md](CHANGELOG.md)). What has been run so far:
+Version 0.7.0 (changes in [CHANGELOG.md](CHANGELOG.md)). What has been run so far:
 
-* the Python library: 116 unit tests, including LBP histograms identical to fastLBP's whole-image run, the H&E-only image against a direct computation, and the clustering's expression recipe, neighbour graph and Leiden partition identical to Scanpy's;
+* the Python library: 129 unit tests, including LBP histograms identical to fastLBP's whole-image run, the H&E-only image against a direct computation, and the clustering's expression recipe, neighbour graph and Leiden partition identical to Scanpy's;
 * real samples at 0.5 µm/px on the UZH server (conda route, one SLURM job, UNI2-h in fp16 on an NVIDIA L4): a Visium HD colorectal cancer slide and the HEST-1k Visium sample ZEN36 with tileparity 0.3.0 to 0.4.1, then four slides with 0.5.0 (`--cluster --redundancy`, three LBP preparations). The slide labelled P1 in those runs is patient P2's section processed a second time by 10x Genomics (see [docs/decisions.md](docs/decisions.md)); it served as a technical replicate. The 0.4.1 run recomputed every step and gave exactly the same cluster labels as the 0.4.0 run in every view, UNI2-h included;
 * the whole workflow on the synthetic test data without containers, with every option of the test profile switched on, with Nextflow 25.04.0 and 26.10.3; stub runs and `nextflow lint` with recent Nextflow versions (the linter of 25.04.0 wrongly reports `meta` as undefined in `conf/modules.config`);
 * GitHub Actions: `CI` runs the unit tests, a stub run with the oldest supported and the latest Nextflow, and lint with the latest, on every push; `Containers` builds the three images and runs the test profile inside them in Docker.
 
-The analyses added in 0.6.0 (corrected ARI, the k shown, F1, stability, galleries, cohort summary, relevance, patch sweep) have been run on synthetic data so far; their first real runs are the colorectal cancer slides P1, P2 and P5 (Visium HD, with the patch sweep) and the inflammatory skin cohort from HEST-1k (`assets/cohort_c_skin_hest.tsv`: 50 sections of 13 patients, lesional and non-lesional skin) ([docs/rolandgarros.md](docs/rolandgarros.md), sections 13 and 14).
+The analyses added in 0.6.0 (corrected ARI, the k shown, F1, stability, galleries, cohort summary, relevance, patch sweep) have been run on synthetic data so far; their first real runs are the colorectal cancer slides P1, P2 and P5 (Visium HD, with the patch sweep) and the inflammatory skin cohort from HEST-1k (`assets/cohort_c_skin_hest.tsv`: 50 sections of 13 patients, lesional and non-lesional skin) ([docs/rolandgarros.md](docs/rolandgarros.md), sections 13 and 14). The analyses added in 0.7.0 (the corrected per-gene null, the noise ceiling, the gene partition, domain markers, texture features against genes, count thinning) have been run on synthetic data; their first real run is the colorectal folder ([docs/rolandgarros.md](docs/rolandgarros.md), section 15).
 
 Not yet implemented:
 

@@ -104,6 +104,15 @@ def validateParams() {
     if (params.relevance && !params.cluster) {
         error("--relevance runs inside the clustering step: add --cluster")
     }
+    if (params.markers && !params.cluster) {
+        error("--markers runs inside the clustering step: add --cluster")
+    }
+    if (params.texture_genes && !params.cluster) {
+        error("--texture_genes runs inside the clustering step: add --cluster")
+    }
+    if (params.texture_genes && params.skip_lbp) {
+        error("--texture_genes needs the LBP histograms: remove --skip_lbp")
+    }
     if (params.patch_sweep) {
         validatePatchSweep()
     }
@@ -162,6 +171,17 @@ def validateCluster() {
         }
         wholeParam('relevance_gene_null_shifts', params.relevance_gene_null_shifts, 0)
         wholeParam('redundancy_folds', params.redundancy_folds, 2)
+    }
+    if (params.markers) {
+        wholeParam('markers_top', params.markers_top, 1)
+    }
+    if (params.texture_genes) {
+        listParam('texture_genes_view', params.texture_genes_view, ['LBP_RGB', 'LBP_RGB_HE', 'LBP_HE', 'LBP_H', 'LBP_E'])
+        wholeParam('texture_genes_n', params.texture_genes_n, 1)
+    }
+    def thin = params.expression_thin_to.toString()
+    if (!(thin ==~ /[0-9]*\.?[0-9]+/)) {
+        error("--expression_thin_to '${params.expression_thin_to}' must be a number of molecules per tile (0: off)")
     }
     if (params.redundancy) {
         if (params.redundancy_views.toString() != 'images') {
@@ -349,7 +369,10 @@ def summaryText(int nSamples, List scales) {
     exports     : ${[params.skip_spe ? null : 'SpatialExperiment', params.skip_anndata ? null : 'AnnData', params.qc_umap ? '3-D UMAP QC' : null].findAll().join(', ')}
     clustering  : ${params.cluster ? "per slide, ${params.cluster_methods} at k = ${params.cluster_k} (figures at k = ${params.cluster_k_ref}; stability: ${params.cluster_stability_reps} subsamples), sets ${params.cluster_sets}${params.cluster_lbp_recipes.toString() != 'hellinger' ? ", LBP prepared as ${params.cluster_lbp_recipes}" : ''}" : 'off (--cluster)'}
     redundancy  : ${params.redundancy ? "${params.redundancy_views.toString() == 'images' ? 'the image' : params.redundancy_views} views, ${params.redundancy_folds} folds of blocks of ${params.redundancy_block_um} um" : 'off (--redundancy)'}
-    relevance   : ${params.relevance ? "expression from every image view, genes from ${params.relevance_gene_views}" : 'off (--relevance)'}
+    relevance   : ${params.relevance ? "expression from every image view, genes from ${params.relevance_gene_views} (${params.relevance_gene_null_shifts} null moves)" : 'off (--relevance)'}
+    markers     : ${params.markers ? "top ${params.markers_top} genes per expression domain" : 'off (--markers)'}
+    texture     : ${params.texture_genes ? "52 features of ${params.texture_genes_view} (${params.texture_genes_channel}) x ${params.texture_genes_n} genes" : 'off (--texture_genes)'}
+    depth       : ${params.expression_thin_to.toString() in ['0', '0.0'] ? 'counts as measured' : "counts thinned to a median of ${params.expression_thin_to} molecules per tile"}
     cohort      : ${params.cluster && params.cohort_summary ? "summary per scale, groups '${params.cohort_group}', unit '${params.cohort_pair}'" : 'off'}${params.cluster && params.cluster_gallery ? '; tile galleries' : ''}
     patch sweep : ${params.patch_sweep ? "LBP (${params.patch_sweep_channels}, radii <= ${params.patch_sweep_max_radius} px) on patches of ${params.patch_sweep_sizes_um} um, Visium HD slides" : 'off (--patch_sweep)'}
     gpu         : ${params.use_gpu}

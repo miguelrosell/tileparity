@@ -21,6 +21,15 @@ from tileparity_lib import cluster, clusterplots, export, lineage, redundancy, r
 log = logging.getLogger("tp_cluster")
 
 
+def thin_note(args) -> str:
+    """Words for the captions when the counts were thinned (--expression-thin-to)."""
+    info = getattr(args, "thin_info", None) or {}
+    if not info.get("applied"):
+        return ""
+    return (f", counts thinned to a median of {info['target_molecules_per_tile']:g} molecules per tile "
+            f"(every molecule kept with p = {info['probability']:.3g})")
+
+
 def names(text: str, allowed, what: str) -> list[str]:
     items = [x.strip() for x in str(text).split(",") if x.strip()]
     if items == ["all"]:
@@ -266,8 +275,19 @@ def main(argv=None):
                     help="how much of the expression (components and genes) each image view predicts")
     ap.add_argument("--relevance-gene-views", default=",".join(relevance.DEFAULT_GENE_VIEWS),
                     help="image views that predict every gene (comma list; 'none' for no gene-level analysis)")
-    ap.add_argument("--relevance-gene-null-shifts", type=int, default=20,
-                    help="moves of the per-gene spatial null (0: none)")
+    ap.add_argument("--relevance-gene-null-shifts", type=int, default=199,
+                    help="moves of the per-gene spatial null (0: none); the smallest p-value is 1 / (1 + moves)")
+    ap.add_argument("--markers", action="store_true", help="marker genes of every expression domain")
+    ap.add_argument("--markers-top", type=int, default=25, help="markers kept per domain")
+    ap.add_argument("--texture-genes", action="store_true",
+                    help="partial Spearman correlation of 52 named LBP texture features with the most variable genes")
+    ap.add_argument("--texture-genes-view", default="LBP_RGB", help="LBP view of the texture features")
+    ap.add_argument("--texture-genes-channel", default="mean",
+                    help="'mean' (mean over the view's channels) or one channel of the view (e.g. R)")
+    ap.add_argument("--texture-genes-n", type=int, default=500, help="most variable genes tested")
+    ap.add_argument("--expression-thin-to", type=float, default=0,
+                    help="thin the counts so that the keep tiles' median is about this many molecules per tile "
+                         "(same probability for every molecule; 0: off)")
     lineage.add_cli(ap)
     args = ap.parse_args(argv)
     process = args.process or "TILEPARITY_CLUSTER"
@@ -293,6 +313,8 @@ def main(argv=None):
                                  names(args.relevance_gene_views, cluster.VIEWS, "relevance-gene-views"))
     if args.redundancy_folds < 2 or args.redundancy_block_um <= 0:
         raise SystemExit("--redundancy-folds must be at least 2 and --redundancy-block-um positive")
+    if args.expression_thin_to < 0 or args.markers_top < 1 or args.texture_genes_n < 1:
+        raise SystemExit("--expression-thin-to must be >= 0, --markers-top and --texture-genes-n >= 1")
 
     prefixes = export.discover(args.input_dir)
     if args.prefix is None:
@@ -303,6 +325,11 @@ def main(argv=None):
         raise SystemExit(f"no {args.prefix}.tiles.tsv.gz in {args.input_dir}")
     prefix = args.prefix
     sample = export.load_sample(args.input_dir, prefix)
+    thin_info = None
+    if args.expression_thin_to > 0:
+        thin_info = cluster.thin_counts(sample, args.expression_thin_to, args.seed)
+        args.thin_info = thin_info
+        log.info("expression thinning: %s", thin_info)
     result = cluster.run(sample, views=args.views, ks=args.k, k_ref=args.k_ref, methods=args.methods, sets=args.sets,
                          n_pcs=args.n_pcs, n_neighbors=args.n_neighbors, n_hvg=args.n_hvg,
                          min_counts_ratio=args.min_counts_ratio, null_shifts=args.null_shifts, seed=args.seed,
@@ -338,7 +365,7 @@ def main(argv=None):
             continue
         ref = info["reference_view"]
         source = lineage.source_text(process, {}, parents=parents,
-                                     context=f"{prefix}, set '{s}' ({info['n_tiles']} tiles), seed {args.seed}")
+                                     context=f"{prefix}, set '{s}' ({info['n_tiles']} tiles), seed {args.seed}{thin_note(args)}")
         text = captions(info, s, args, ref, source, mask_mpp)
         made = {
             f"agreement_{s}": clusterplots.agreement_figure(result["agreement"], info, s, args.methods,
@@ -367,11 +394,20 @@ def main(argv=None):
     if args.relevance:
         rel_info = run_relevance(sample, result, args, prefix, parents, process, outputs)
 
+    markers_info = None
+    if args.markers:
+        markers_info = run_markers(sample, result, f1, args, prefix, parents, process, outputs)
+
+    texture_info = None
+    if args.texture_genes:
+        texture_info = run_texture_genes(sample, result, args, prefix, parents, process, outputs)
+
     summary = {
         "prefix": prefix,
         "sample_id": str(sample["tiles"]["sample_id"].iloc[0]) if len(sample["tiles"]) else prep.get("sample_id"),
         "scale_mpp": prep.get("mpp_target"),
-        "parameters": {k: v for k, v in vars(args).items() if k not in ("input_dir", "lineage_parent", "process")},
+        "parameters": {k: v for k, v in vars(args).items()
+                       if k not in ("input_dir", "lineage_parent", "process", "thin_info")},
         "sets": result["sets"],
         "view_descriptions": {v: cluster.view_description(v)
                               for v in dict.fromkeys(v for i in result["sets"].values() for v in (i.get("views") or {}))},
@@ -387,6 +423,12 @@ def main(argv=None):
         summary["redundancy"] = red_info
     if rel_info is not None:
         summary["relevance"] = rel_info
+    if markers_info is not None:
+        summary["markers"] = markers_info
+    if texture_info is not None:
+        summary["texture_genes"] = texture_info
+    if thin_info is not None:
+        summary["expression_thinning"] = thin_info
     Path(outputs["summary"]).write_text(json.dumps(lineage._jsonable(summary), indent=2))
     inputs = {role: Path(args.input_dir) / f"{prefix}.{suffix}" for role, suffix in
               (("tiles", "tiles.tsv.gz"), ("uni2h", "uni2h.h5"), ("lbp", "lbp.h5"), ("counts", "counts.h5"))}
@@ -424,7 +466,7 @@ def run_redundancy(sample: dict, result: dict, args, prefix: str, parents, proce
         red["tiles"].to_csv(fh, sep="\t", index=False, na_rep="NA", float_format="%.6g")
     outputs.update(files)
     source = lineage.source_text(process, {}, parents=parents,
-                                 context=f"{prefix}, set '{s}' ({len(tiles)} tiles), seed {args.seed}")
+                                 context=f"{prefix}, set '{s}' ({len(tiles)} tiles), seed {args.seed}{thin_note(args)}")
     text = redundancy_captions(red, args, source)
     for name, img in (("redundancy_keep", clusterplots.redundancy_figure(red, text["matrix"], prefix, s)),
                       ("redundancy_maps_keep", clusterplots.redundancy_maps_figure(sample, tiles, red, text["maps"],
@@ -443,45 +485,77 @@ def relevance_captions(rel: dict, args, source: str) -> dict:
     views = "Views: " + "; ".join(f"{v} = {cluster.view_description(v)}" for v in info["views"]) + "."
     model = (f"ridge regression with spatial cross-validation ({info['n_folds']} folds of square blocks of {block}): "
              "every tile is predicted by a model fitted on other parts of the slide")
+    ginfo = info.get("genes") or {}
+    n_null = ginfo.get("null_moves", 0)
+    ceiling = (info.get("split_halves") or {}).get("r2_ceiling")
     main = {
         "what": (f"How much of the expression of the {info['n_tiles']} tiles of the set 'keep' each image view predicts. "
                  f"a: the expression's principal components (those of the clustering, at most {args.n_pcs}) predicted "
                  f"from each view's components, {model}; R2 = the share of the expression's variance that the view "
                  "predicts; whiskers: 95 % interval (block bootstrap); black tick: 95th percentile of the spatial null "
-                 "(the view's map moved over the tile grid, so that it no longer describes the same tissue). b: for "
+                 "(the view's map moved over the tile grid, so that it no longer describes the same tissue). In "
+                 "brackets: the share of the reachable (split halves: every molecule goes at random to half A or B; "
+                 "R2 of half B's components from the view / R2 of half B's components from half A"
+                 + (f", = {ceiling:.2f} here" if ceiling is not None and np.isfinite(ceiling) else "") + "). b: for "
                  "pairs of views A and B, the R2 of A and B together split into what only A predicts (R2(A+B) - "
-                 "R2(B)), what only B predicts (R2(A+B) - R2(A)) and what both predict (the rest). " + views),
+                 "R2(B)), what only B predicts (R2(A+B) - R2(A)) and what both predict (the rest). c: R2 of each of "
+                 "the first five expression components on its own. " + views),
         "how": ("A bar well beyond its black tick: the view predicts expression better than an unrelated map with the "
-                "same structure would. In b, a long 'only A' part: A sees expression that B misses. With LBP + "
-                "INTENSITY_HE, 'only LBP' is what texture adds to the mere amount of stain."),
+                "same structure would. A low R2 with a high share of the reachable: the expression itself is noisy "
+                "(few molecules per tile), not the image blind. In b, a long 'only A' part: A sees expression that B "
+                "misses. With LBP + INTENSITY_HE, 'only LBP' is what texture adds to the mere amount of stain. In c, "
+                "a view that predicts PC1 but not the later components sees only the main axis of the tissue."),
         "caveats": ("Linear prediction between principal components; R2 refers to the variance the expression's "
-                    "components keep. Out-of-sample R2 can be slightly negative, and so can a 'unique' part. "
-                    "Neighbouring tiles are not independent, so no classical p-value is given. Every predictor: "
-                    "relevance.tsv; the split: relevance_partition.tsv."),
+                    "components keep. Out-of-sample R2 can be slightly negative, and so can a 'unique' part. The "
+                    "ceiling compares halves of the data, so it is a ceiling for half the depth. Neighbouring tiles "
+                    "are not independent, so no classical p-value is given. Every predictor: relevance.tsv; the "
+                    "split: relevance_partition.tsv."),
         "source": source,
     }
     genes = {
         "what": (f"Gene by gene: each of the expression's most variable genes (counts per 10 000, log1p, z-scores, as in "
-                 f"the clustering) predicted from the components of an image view ({model}; a penalty per gene). a: "
-                 "every gene's R2 from two views (diagonal: equal R2); coloured when the gene beats the per-gene "
-                 "spatial null (z = (R2 - null mean) / null sd, one-sided normal p-value, Benjamini-Hochberg q < 0.05), "
-                 "labelled: the genes best predicted from the second view and those it adds most to the first. b: the "
-                 "genes best predicted from the second view, with the first view's R2 (black tick). " + views),
-        "how": ("Genes far above the diagonal are predicted from texture (LBP) better than from UNI2-h; genes on the "
-                "diagonal are seen equally by both. Genes of abundant, visually distinct cell types (stroma, muscle, "
-                "epithelium) are expected among the best predicted; a gene predicted from LBP beyond INTENSITY_HE "
-                "(column adds_LBP_RGB_to_INTENSITY_HE) relates to texture rather than to the amount of stain."),
+                 f"the clustering) predicted from the components of an image view ({model}; a penalty per gene chosen "
+                 "by generalised cross-validation inside the training folds). a: every gene's R2 from two views "
+                 "(diagonal: equal R2), coloured by which views beat the per-gene spatial null (the view's map moved "
+                 f"{n_null} times over the tile grid and fitted exactly like the real map; empirical p = (1 + moves "
+                 "reaching the real R2) / (1 + moves), Benjamini-Hochberg q < 0.05 over the genes); labelled: the "
+                 "genes best predicted from the second view and those it adds most to the first. b: the genes best "
+                 "predicted from the second view, with the first view's R2 (black tick) and the gene's split-half "
+                 "reliability (the largest R2 its noise allows, roughly). " + views),
+        "how": ("Purple: both views predict the gene beyond chance; orange: only LBP; blue: only UNI2-h; grey: neither. "
+                "Genes far above the diagonal are predicted from texture (LBP) better than from UNI2-h. Genes of "
+                "abundant, visually distinct cell types (stroma, muscle, epithelium) are expected among the best "
+                "predicted; a gene predicted from LBP beyond INTENSITY_HE (column adds_LBP_RGB_to_INTENSITY_HE) "
+                "relates to texture rather than to the amount of stain."),
         "caveats": ("A gene predicted from the image is associated with what the tissue looks like there, not "
-                    "necessarily expressed by the cells that create the texture. The null has few moves, so the "
-                    "p-values are approximate and assume a normal null; genes are correlated with each other. Use the "
-                    "ranking, and confirm a gene on other slides. Every gene: relevance_genes.tsv.gz."),
+                    "necessarily expressed by the cells that create the texture. With "
+                    f"{n_null} moves the smallest possible p is {1 / (1 + n_null) if n_null else float('nan'):.3g}, so "
+                    "with many genes only a gene that beats every move can reach q < 0.05; genes are correlated with "
+                    "each other. Confirm a gene on other slides. Every gene: relevance_genes.tsv.gz."),
         "source": source,
     }
-    return {"main": main, "genes": genes}
+    partition = {
+        "what": ("Gene by gene, the R2 of UNI2-h and LBP together split into three parts: only UNI2-h (R2(both) - "
+                 "R2(LBP)), both (R2(UNI2-h) + R2(LBP) - R2(both)) and only LBP (R2(both) - R2(UNI2-h)). a: the "
+                 "genes best predicted from both views together; black tick: the gene's split-half reliability (an "
+                 "estimate of the largest R2 its sampling noise allows). b: the parts summed over the genes that beat "
+                 "the spatial null from at least one view, as shares of their sum."),
+        "how": ("A gene with a long 'only UNI2-h' part is predicted by what UNI2-h sees beyond LBP texture; a long "
+                "'both' part: the gene follows texture that UNI2-h also encodes; 'only LBP': texture UNI2-h does not "
+                "represent linearly. A bar far below its tick: the image misses much of what could be predicted."),
+        "caveats": ("Linear models on principal components: 'only UNI2-h' is what UNI2-h predicts beyond the LBP "
+                    "histograms, not beyond texture in general. Out-of-sample R2 is noisy, so small parts (and "
+                    "negative ones, drawn as 0) mean little. No test of the parts themselves. Every gene: "
+                    "relevance_gene_partition.tsv.gz."),
+        "source": source,
+    }
+    return {"main": main, "genes": genes, "partition": partition}
 
 
 def run_relevance(sample: dict, result: dict, args, prefix: str, parents, process: str, outputs: dict) -> dict:
     """The relevance analysis of the set keep: tables, figures and what it did."""
+    from scipy import sparse
+
     s = "keep"
     info = result["sets"].get(s, {})
     if info.get("status") != "clustered":
@@ -491,39 +565,174 @@ def run_relevance(sample: dict, result: dict, args, prefix: str, parents, proces
     mask = result["masks"][s]
     tiles = sample["tiles"][mask]
     mpp = (sample["provenance"].get("prepare") or {}).get("mpp_target")
-    genes = None
-    if args.relevance_gene_views and sample["counts"].shape[0] > 0:
-        from scipy import sparse
-
-        Z, idx = relevance.expression_genes(sparse.csc_matrix(sample["counts"])[:, np.flatnonzero(mask)], args.n_hvg)
-        genes = (Z, np.asarray(sample["gene_ids"])[idx], np.asarray(sample["gene_names"])[idx])
+    genes, counts, idx = None, None, None
+    if sample["counts"].shape[0] > 0:
+        Yset = sparse.csc_matrix(sample["counts"])[:, np.flatnonzero(mask)]
+        counts = sparse.csr_matrix(Yset.T)
+        if args.relevance_gene_views:
+            Z, idx = relevance.expression_genes(Yset, args.n_hvg)
+            genes = (Z, np.asarray(sample["gene_ids"])[idx], np.asarray(sample["gene_names"])[idx])
     rel = relevance.run(result["scores"][s], result["pc_variance"][s], tiles, views, s, mpp, genes=genes,
                         gene_views=args.relevance_gene_views, n_folds=args.redundancy_folds,
                         block_um=args.redundancy_block_um, seed=args.seed, null_shifts=args.redundancy_null_shifts,
-                        n_boot=args.redundancy_bootstrap, gene_null_shifts=args.relevance_gene_null_shifts, log=log)
+                        n_boot=args.redundancy_bootstrap, gene_null_shifts=args.relevance_gene_null_shifts,
+                        counts=counts, gene_index=idx, n_hvg=args.n_hvg, log=log)
     if rel["info"]["status"] != "computed":
         log.info("relevance: %s", rel["info"]["status"])
         return rel["info"]
     files = {"relevance": f"{prefix}.relevance.tsv", "relevance_partition": f"{prefix}.relevance_partition.tsv"}
     rel["table"].to_csv(files["relevance"], sep="\t", index=False, na_rep="NA", float_format="%.6g")
     rel["partition"].to_csv(files["relevance_partition"], sep="\t", index=False, na_rep="NA", float_format="%.6g")
-    if "genes" in rel:
-        files["relevance_genes"] = f"{prefix}.relevance_genes.tsv.gz"
-        with gzip.open(files["relevance_genes"], "wt") as fh:
-            rel["genes"].to_csv(fh, sep="\t", index=False, na_rep="NA", float_format="%.6g")
+    for key, name in (("genes", "relevance_genes"), ("gene_partition", "relevance_gene_partition")):
+        if key in rel:
+            files[name] = f"{prefix}.{name}.tsv.gz"
+            with gzip.open(files[name], "wt") as fh:
+                rel[key].to_csv(fh, sep="\t", index=False, na_rep="NA", float_format="%.6g")
     outputs.update(files)
     source = lineage.source_text(process, {}, parents=parents,
-                                 context=f"{prefix}, set '{s}' ({len(tiles)} tiles), seed {args.seed}")
+                                 context=f"{prefix}, set '{s}' ({len(tiles)} tiles), seed {args.seed}{thin_note(args)}")
     text = relevance_captions(rel, args, source)
     made = {"relevance_keep": clusterplots.relevance_figure(rel, text["main"], prefix, s)}
     if "genes" in rel:
         made["relevance_genes_keep"] = clusterplots.relevance_genes_figure(rel, text["genes"], prefix)
+    if "gene_partition" in rel:
+        made["relevance_gene_partition_keep"] = clusterplots.gene_partition_figure(rel["gene_partition"],
+                                                                                   text["partition"], prefix)
     for name, img in made.items():
         if img is not None:
             path = f"{prefix}.{name}.png"
             img.save(path)
             outputs[f"figure_{name}"] = path
     return rel["info"]
+
+
+def markers_captions(args, source: str, info: dict) -> dict:
+    ref = info.get("reference_view", "EXPRESSION")
+    return {
+        "what": (f"The domains of {ref} (its clusters, at the k shown, per method) described by their marker genes. "
+                 "Per domain: its colour and number of tiles; the F1 of every image view for it (how well the view's "
+                 "matched cluster covers the domain: 2 x shared tiles / (domain + cluster)); and its best markers, "
+                 "ranked by AUROC (the probability that a random tile of the domain has more of the gene than a random "
+                 "tile outside it; log1p counts per 10 000), among the genes with log2 fold change > 0, detected in at "
+                 "least 10 % of the domain's tiles and in at least 5 % of the set's tiles."),
+        "how": ("Read a row as a sentence: this domain is where these genes are high, and these views find it (dark "
+                "cells) or miss it (white cells). A domain that UNI2-h finds and LBP misses is a candidate for what "
+                "UNI2-h sees beyond texture; its markers say what it is in biology. AUROC 0.5: no difference, 1: "
+                "every tile of the domain above every other tile."),
+        "caveats": ("Markers describe the domains; they are not tests (the tiles of a domain are neighbours, and the "
+                    "domains were found from these same genes). A tile holds many cells, so a marker can come from "
+                    "any of them. Every domain, method and k: markers.tsv.gz; the F1 of every view: cluster_f1.tsv."),
+        "source": source,
+    }
+
+
+def run_markers(sample: dict, result: dict, f1, args, prefix: str, parents, process: str, outputs: dict) -> dict:
+    """Marker genes of the expression domains of the set keep (every method and k)."""
+    from scipy import sparse
+
+    from tileparity_lib import markers
+
+    s = "keep"
+    info = result["sets"].get(s, {})
+    if info.get("status") != "clustered" or sample["counts"].shape[0] == 0:
+        return {"status": "not computed: no clustered expression in the set 'keep'"}
+    mask = result["masks"][s]
+    parts = markers.expression_partitions(result, s)
+    if not parts:
+        return {"status": "not computed: EXPRESSION was not clustered"}
+    counts = sparse.csr_matrix(sparse.csc_matrix(sample["counts"])[:, np.flatnonzero(mask)].T)
+    table = markers.domain_markers(counts, sample["gene_ids"], sample["gene_names"], parts, s, n_top=args.markers_top)
+    files = {"markers": f"{prefix}.markers.tsv.gz"}
+    with gzip.open(files["markers"], "wt") as fh:
+        table.to_csv(fh, sep="\t", index=False, na_rep="NA", float_format="%.6g")
+    dom = markers.with_f1(table, f1)
+    if len(dom):
+        files["markers_domains"] = f"{prefix}.markers_domains.tsv"
+        dom.to_csv(files["markers_domains"], sep="\t", index=False, na_rep="NA", float_format="%.6g")
+    outputs.update(files)
+    source = lineage.source_text(process, {}, parents=parents,
+                                 context=f"{prefix}, set '{s}' ({int(mask.sum())} tiles), seed {args.seed}"
+                                         f"{thin_note(args)}")
+    img = clusterplots.markers_figure(table, f1, info, args.methods, markers_captions(args, source, info), prefix)
+    if img is not None:
+        path = f"{prefix}.cluster_markers_keep.png"
+        img.save(path)
+        outputs["figure_markers_keep"] = path
+    log.info("markers: %d rows for %d partitions", len(table), len(parts))
+    return {"status": "computed", "partitions": len(parts), "rows": int(len(table)), "top": args.markers_top}
+
+
+def texture_captions(args, source: str, n_genes: int, channels: str) -> dict:
+    return {
+        "what": (f"For every named texture feature of {args.texture_genes_view} (channels: {channels}) and every one of "
+                 f"the {n_genes} most variable genes, the partial Spearman correlation over the tiles of the set 'keep' "
+                 "with the tile's depth removed (ranks of the feature and of the gene, log1p counts per 10 000, each "
+                 "regressed on the rank of log10 molecules per tile; correlation of the residuals). A feature is the "
+                 "fraction of the tile's pixels of one LBP type at one radius: spot bright (code 0: every neighbour "
+                 "darker), spot dark or flat (code P: no neighbour darker), edge (codes 1 .. P - 1: the brighter "
+                 "neighbours form one arc), irregular (code P + 1). a: the genes most associated with texture "
+                 "(largest |rho| among q < 0.05) against the 52 features; b: per feature, how many genes reach q < 0.05."),
+        "how": ("Red: more of this texture where the gene is high; blue: less. A column with many dots is a texture "
+                "that follows the expression; a row, a gene that follows texture. In b, the radius where a type peaks "
+                "is the scale (in pixels; x 0.5 um at 0.5 um per px) of the structure that goes with the genes, e.g. "
+                "dark spots of nucleus size."),
+        "caveats": ("Neighbouring tiles are alike, so the p-values use the modified t-test (Clifford, Richardson & "
+                    "Hemon 1989; Dutilleul 1993): the number of tiles is replaced by an effective number from the "
+                    "spatial correlograms of the two variables (column n_eff). Benjamini-Hochberg q over all features "
+                    "and genes. Features of neighbouring radii and of different types are correlated with each other "
+                    "(the four types of one radius add up to 1). A correlation is an association: cell density, tissue "
+                    "type and stain all move texture and genes together. Every pair: texture_genes.tsv.gz; per "
+                    "feature: texture_genes_summary.tsv."),
+        "source": source,
+    }
+
+
+def run_texture_genes(sample: dict, result: dict, args, prefix: str, parents, process: str, outputs: dict) -> dict:
+    """Named LBP texture features against the most variable genes, set keep."""
+    from scipy import sparse
+
+    from tileparity_lib import texture_genes
+
+    s = "keep"
+    info = result["sets"].get(s, {})
+    if info.get("status") != "clustered" or sample["counts"].shape[0] == 0:
+        return {"status": "not computed: no clustered expression in the set 'keep'"}
+    if args.texture_genes_view not in sample["blocks"]:
+        return {"status": f"not computed: no view {args.texture_genes_view}"}
+    mask = result["masks"][s]
+    tiles = sample["tiles"][mask]
+    if "row" not in tiles or (tiles["row"].astype(int) < 0).any():
+        return {"status": "not computed: the tiles are not on a grid"}
+    X, cols = sample["blocks"][args.texture_genes_view]
+    F, fnames, ftable = texture_genes.features(X[mask], cols, args.texture_genes_channel)
+    Yset = sparse.csc_matrix(sample["counts"])[:, np.flatnonzero(mask)]
+    from tileparity_lib.cluster import highly_variable_genes
+
+    N = relevance.normalise(Yset.T)
+    idx = highly_variable_genes(N, args.texture_genes_n)
+    depth = np.log10(np.asarray(Yset.sum(axis=0)).ravel() + 1.0)
+    table = texture_genes.run(F, fnames, ftable, N[:, idx].toarray(), np.asarray(sample["gene_ids"])[idx],
+                              np.asarray(sample["gene_names"])[idx], depth, tiles["row"], tiles["col"])
+    summ = texture_genes.summary(table)
+    files = {"texture_genes": f"{prefix}.texture_genes.tsv.gz", "texture_genes_summary": f"{prefix}.texture_genes_summary.tsv"}
+    with gzip.open(files["texture_genes"], "wt") as fh:
+        table.to_csv(fh, sep="\t", index=False, na_rep="NA", float_format="%.6g")
+    summ.to_csv(files["texture_genes_summary"], sep="\t", index=False, na_rep="NA", float_format="%.6g")
+    outputs.update(files)
+    channels = ftable["channels"].iloc[0] if len(ftable) else ""
+    source = lineage.source_text(process, {}, parents=parents,
+                                 context=f"{prefix}, set '{s}' ({int(mask.sum())} tiles), seed {args.seed}"
+                                         f"{thin_note(args)}")
+    img = clusterplots.texture_genes_figure(table, summ, texture_captions(args, source, len(idx), channels), prefix)
+    if img is not None:
+        path = f"{prefix}.texture_genes_keep.png"
+        img.save(path)
+        outputs["figure_texture_genes_keep"] = path
+    n_sig = int((table["q"] < 0.05).sum()) if len(table) else 0
+    log.info("texture-genes: %d features x %d genes, %d pairs with q < 0.05", F.shape[1], len(idx), n_sig)
+    return {"status": "computed", "view": args.texture_genes_view, "channels": channels, "n_features": int(F.shape[1]),
+            "n_genes": int(len(idx)), "n_pairs_q05": n_sig,
+            "median_n_eff": float(table["n_eff"].median()) if len(table) else None, "n_tiles": int(mask.sum())}
 
 
 if __name__ == "__main__":

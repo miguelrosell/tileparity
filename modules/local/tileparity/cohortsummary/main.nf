@@ -13,7 +13,7 @@ process TILEPARITY_COHORT {
     tuple val(meta), path(files), val(samples_tsv)
 
     output:
-    tuple val(meta), path("${meta.id}.{long.tsv.gz,key.tsv,groups.tsv,genes.tsv.gz}"), optional: true, emit: tables
+    tuple val(meta), path("${meta.id}.{long.tsv.gz,key.tsv,groups.tsv,genes.tsv.gz,ari_by_k.tsv,gene_partition.tsv,domains.tsv,texture_genes.tsv.gz,patch_sweep.tsv}"), optional: true, emit: tables
     tuple val(meta), path("${meta.id}.*.png")                                         , optional: true, emit: figures
     tuple val(meta), path("${meta.id}.report.html")                                   , emit: report
     tuple val(meta), path("${meta.id}.cohort.lineage.json")                          , emit: lineage

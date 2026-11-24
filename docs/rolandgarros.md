@@ -529,6 +529,83 @@ tar czf tp_v060_skin.tgz --exclude='*.h5' --exclude='*.h5ad' --exclude='*.rds' -
 ls -lh tp_v060_skin.tgz
 ```
 
+## 15. Colorectal cancer with tileparity 0.7.0: genes, domains and texture
+
+The four-sample folder of sections 12 and 13 again, with the 0.7.0 analyses: the corrected per-gene null (199 moves), the noise ceiling, the gene partition, the domain markers and the texture features against genes. A second run thins the counts to the depth of the skin slides (about 1,000 molecules per tile against about 48,000), to see which results depend on depth. Both runs reuse the earlier steps (`-resume`): only the clustering step, the galleries, the cohort summary and the exports run again.
+
+**1. Update the code**:
+
+```bash
+source $HOME/tileparity/env.sh
+git -C $TP/tileparity pull
+git -C $TP/tileparity log -1 --oneline          # "tileparity 0.7.0: ..." or later
+```
+
+**2. Is the cache of the 0.6.0 run still there?**
+
+```bash
+cd $TP/runs/four_samples
+ls -d work .nextflow results_v060               # three names: the cache is there
+du -sh work                                     # its size (tens to hundreds of GB)
+nextflow log | tail -3                          # the last runs of this folder; the newest is the 0.6.0 run
+```
+
+If `work` is gone, the same job still works: every step is computed again (UNI2-h on the GPU, fastLBP, the patch sweep), a few hours instead of about one. The data in `$TP/data/raw` must still be there (`ls $TP/data/raw`).
+
+**3. The job script**: two runs one after the other in the same folder, so that the second reuses the first's cache. The first writes `results_v070` (the options of section 13 plus `--markers --texture_genes`); the second writes `results_v070_thin1000` (counts thinned to a median of 1,000 molecules per tile; no galleries, no exports, no patch sweep: they would not change or do not use the thinned counts).
+
+```bash
+cat > run_v070.sbatch <<'END'
+#!/bin/bash
+#SBATCH --job-name=tp_crc070
+#SBATCH --cpus-per-task=32
+#SBATCH --mem=128G
+#SBATCH --gres=gpu:1
+#SBATCH --time=24:00:00
+#SBATCH --output=%x_%j.log
+set -e
+source $HOME/tileparity/env.sh
+cd $SLURM_SUBMIT_DIR
+printf 'executor {\n    cpus = %s\n    memory = "%s MB"\n}\n' "$SLURM_CPUS_PER_TASK" "$SLURM_MEM_PER_NODE" > job.config
+nvidia-smi
+COMMON="-profile conda,gpu -c job.config --input samplesheet.csv -w work \
+    --max_cpus 32 --max_memory 120.GB --max_time 24.h \
+    --uni2h_weights $TP/models/uni2h/pytorch_model.bin --uni2h_batch_size 64 \
+    --scales_mpp 0.5 --mask_compare --min_tissue_extract 0.3 --qc_umap \
+    --lbp_channels rgb,rgb_he,he,h,e \
+    --cluster --redundancy --relevance --markers --texture_genes"
+nextflow run $TP/tileparity $COMMON --outdir results_v070 --patch_sweep -resume
+nextflow run $TP/tileparity $COMMON --outdir results_v070_thin1000 --expression_thin_to 1000 \
+    --cluster_gallery false --skip_anndata --skip_spe -resume
+END
+sbatch run_v070.sbatch
+squeue -u $USER
+tail -f tp_crc070_<job number>.log                 # Ctrl+C stops watching, not the job
+```
+
+In the log of the first run, `TILEPARITY_PREPARE`, `UNI2H_EMBED`, `FASTLBP_EXTRACT`, `TILEPARITY_AGGREGATEST` and `TILEPARITY_PATCH_SWEEP` should say `cached`; `TILEPARITY_CLUSTER` runs once per slide (about 10–20 minutes each: the per-gene null fits 3 views × 199 moved maps), then the galleries, the cohort summary and the exports. The second run repeats only the clustering step and the cohort summary. When the job has ended: `sacct -j <job number> --format=JobID,State,Elapsed,MaxRSS`.
+
+**4. What to look at**, in `results_v070/cohort/mpp0.5000/`:
+
+1. `report.html`: every figure and, at the end, the expression domains of every slide with the F1 of every view and their markers.
+2. `ari_by_k_corrected.png` and `ari_by_k.tsv`: agreement by k corrected for the spatial null, the best k of every view.
+3. `relevance.png`: R² and the share of the reachable; `gene_partition.png`: how much of what the image predicts of the genes is shared by UNI2-h and LBP.
+4. `texture_genes.png` and `texture_genes.tsv.gz`: texture–gene associations replicated across slides.
+5. Per slide (`<slide>/mpp0.5000/cluster/`): `cluster_markers_keep.png` (the domains LBP misses, with their markers), `relevance_genes_keep.png`, `relevance_gene_partition_keep.png`, `texture_genes_keep.png`.
+
+Then the same files in `results_v070_thin1000/`: what stays the same at the depth of the skin slides holds for skin as well; what drops is a matter of depth.
+
+**5. Package and send**:
+
+```bash
+cd $TP/runs/four_samples
+tar czf tp_v070_crc.tgz --exclude='*.h5' --exclude='*.h5ad' --exclude='*.rds' --exclude='*.tif' \
+    results_v070 results_v070_thin1000 tp_crc070_*.log run_v070.sbatch samplesheet.csv
+ls -lh tp_v070_crc.tgz
+```
+
+From a terminal on the laptop: `scp <user>@wimbledon.mls.uzh.ch:tileparity/runs/four_samples/tp_v070_crc.tgz ~/`.
+
 ## Route B: containers (Apptainer or Singularity)
 
 If Apptainer or Singularity becomes available on the login node and the compute nodes, Nextflow can run on the login node and send every task to SLURM as its own job, each in the pipeline's container image (no environments to create):

@@ -3,7 +3,9 @@
 // (adjusted Rand index, NMI, spatial null, corrected ARI, F1 per expression domain,
 // stability under subsampling), with figures. With --redundancy, also how much of each
 // image view the others predict (redundancy*); with --relevance, how much of the
-// expression (components and genes) each image view predicts (relevance*).
+// expression (components and genes) each image view predicts (relevance*); with --markers,
+// the marker genes of every expression domain (markers*); with --texture_genes, named LBP
+// texture features against the most variable genes (texture_genes*).
 process TILEPARITY_CLUSTER {
     tag "${meta.id}"
     label 'process_medium'
@@ -20,9 +22,11 @@ process TILEPARITY_CLUSTER {
     tuple val(meta), path("${prefix}.cluster_*.png")                       , optional: true       , emit: figures
     tuple val(meta), path("${prefix}.redundancy*")                         , optional: true       , emit: redundancy
     tuple val(meta), path("${prefix}.relevance*")                          , optional: true       , emit: relevance
+    tuple val(meta), path("${prefix}.markers*")                            , optional: true       , emit: markers
+    tuple val(meta), path("${prefix}.texture_genes*")                      , optional: true       , emit: texture_genes
     tuple val(meta), path("${prefix}.cluster_{summary,f1,stability}.tsv")  , optional: true       , emit: tables
     tuple val(meta), path("${prefix}.cluster_representatives.tsv")         , optional: true       , emit: representatives
-    tuple val(meta), path("${prefix}.{cluster_agreement.tsv,cluster_summary.tsv,cluster_f1.tsv,cluster_stability.tsv,cluster.json,redundancy.tsv,relevance.tsv,relevance_partition.tsv,relevance_genes.tsv.gz}"), emit: cohort
+    tuple val(meta), path("${prefix}.{cluster_agreement.tsv,cluster_summary.tsv,cluster_f1.tsv,cluster_stability.tsv,cluster.json,redundancy.tsv,relevance.tsv,relevance_partition.tsv,relevance_genes.tsv.gz,relevance_gene_partition.tsv.gz,markers.tsv.gz,markers_domains.tsv,texture_genes.tsv.gz}"), emit: cohort
     path "versions.yml"                                                                        , emit: versions
 
     script:

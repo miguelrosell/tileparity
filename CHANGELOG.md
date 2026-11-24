@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.7.0 (2026-11-24)
+
+The analyses agreed after the 0.6.0 results: correct p-values for the genes, a noise ceiling for the expression, what UNI2-h sees beyond LBP texture gene by gene, the expression domains named by their markers, and named texture features against genes. Core outputs and defaults unchanged; one default of `--relevance` changed (`--relevance_gene_null_shifts` 20 → 199).
+
+**Relevance (`--relevance`)**
+
+* Fix: the per-gene spatial null now fits every moved map with exactly the rule of the real fit (one ridge penalty per gene, chosen by generalised cross-validation), and the p-value is empirical, (1 + moves reaching the real R²) / (1 + moves), instead of a normal approximation. With the 0.6 null the q-values were too optimistic. Default moves 20 → 199; the ridge per gene goes through the SVD of the predictors, so 199 moves cost minutes.
+* Split-half noise ceiling: `r2_half`, `r2_ceiling` and `fraction` (the share of the reachable) in `relevance.tsv`; R² of each of PCs 1–5 (`r2_pc1` … `r2_pc5`); per gene, `split_half_r` and `reliability` (Spearman–Brown).
+* Per gene, the R² of UNI2-h and LBP together split into only UNI2-h, shared and only LBP (also INTENSITY_HE with LBP): `relevance_gene_partition.tsv.gz`, `relevance_gene_partition_keep.png`.
+* `relevance_genes_keep.png` has four colours (both views beat the null, only LBP, only UNI2-h, neither) with counts; `relevance_keep.png` shows the share of the reachable and the R² per component.
+
+**New optional analyses (with `--cluster`)**
+
+* `--markers`: marker genes of every expression domain (AUROC, log2 fold change, detection), every method and k: `markers.tsv.gz`, `markers_domains.tsv` (with the F1 of every view), `cluster_markers_keep.png`.
+* `--texture_genes`: 52 named LBP texture features (bright spot, dark spot or flat, edge, irregular × 13 radii) against the most variable genes, partial Spearman with depth removed, modified t-test for spatial autocorrelation (Clifford et al. 1989; Dutilleul 1993), Benjamini–Hochberg: `texture_genes.tsv.gz`, `texture_genes_summary.tsv`, `texture_genes_keep.png`.
+* `--expression_thin_to`: thin the counts to a median depth before the clustering step's analyses (sensitivity to depth).
+
+**Cohort summary**
+
+* New figures: agreement by k corrected for the spatial null (`ari_by_k_corrected.png`, with the best k), stability over the slides (`stability.png`), gene partition per slide (`gene_partition.png`), replicated texture–gene associations (`texture_genes.png`); `relevance.png` adds the share of the reachable.
+* New tables: `ari_by_k.tsv`, `gene_partition.tsv`, `domains.tsv`, `texture_genes.tsv.gz`; `genes.tsv.gz` counts the slides where each gene beats the null. `patch_sweep.tsv` is now published (it was written but not declared as an output).
+
+**Other**
+
+* Container images unchanged (no new dependency); library version 0.7.0.
+
 ## 0.6.1 (2026-11-14)
 
 * Fix: the combined AnnData export failed for HEST samples whose genes are named by symbol only (a few symbols occur twice, and AnnData cannot combine objects with a repeated gene index). Gene names are now made unique (`-1`, `-2`, ... appended to repeats, as AnnData's `var_names_make_unique`) and the original id is kept in `var["gene_id"]`. Found on the skin cohort; the colorectal slides were not affected.
