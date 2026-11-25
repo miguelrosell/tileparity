@@ -476,6 +476,40 @@ def torus_pairs(rows, cols, n: int, seed: int, min_overlap: float = 0.3,
     return out
 
 
+def patched_partners(moves, n_tiles: int, seed: int, max_pieces: int = 10) -> list[np.ndarray]:
+    """Null realizations that cover every tile: for realization k, every tile gets the partner
+    of move k; the tiles that move leaves without a partner (their partner falls outside the
+    tissue) take the partner of other moves, in random order, until every tile has one or
+    ``max_pieces`` moves are used. The moved map is then a mosaic of a few shifted copies of
+    the real map, with its local structure, laid over all tiles. Returns one array per
+    realization: the partner of every tile (-1: none found).
+
+    Why: a fit on the tiles of a single move uses fewer tiles than the real fit, and an
+    out-of-sample R^2 on fewer tiles is lower even by chance, which makes the real fit look
+    better than it is when the overlap is small. Fitted on (almost) all tiles, the moved maps
+    are compared with the real map on equal terms."""
+    rng = np.random.default_rng(seed)
+    out = []
+    m_total = len(moves)
+    for k in range(m_total):
+        partner = np.full(n_tiles, -1)
+        i, j = moves[k]
+        partner[i] = j
+        pieces = 1
+        for m in rng.permutation(m_total):
+            if pieces >= max_pieces or (partner >= 0).all():
+                break
+            if m == k:
+                continue
+            i, j = moves[m]
+            free = partner[i] < 0
+            if free.any():
+                partner[i[free]] = j[free]
+                pieces += 1
+        out.append(partner)
+    return out
+
+
 def null_ari(a: np.ndarray, b: np.ndarray, pairs) -> np.ndarray:
     return np.array([ari(a[i], b[j]) for i, j in pairs], float)
 
@@ -613,7 +647,8 @@ def run(sample: dict, views=VIEWS, ks=DEFAULT_K, k_ref="auto", methods=METHODS, 
         everything = done + alternatives
         sub = tiles[sel]
         pairs = torus_pairs(sub["row"], sub["col"], null_shifts, seed) if on_grid(sub) and null_shifts > 0 else []
-        info["null"] = ({"moves": len(pairs), "min_shift": 0.2, "min_overlap": 0.3} if pairs else
+        info["null"] = ({"moves": len(pairs), "min_shift": 0.2, "min_overlap": 0.3,
+                         "overlap_median": float(np.median([len(i) for i, _ in pairs]) / max(len(sub), 1))} if pairs else
                         {"moves": 0, "note": "not computed: tiles not on a grid (spot tiles), or no possible move"})
         for m in methods:
             for k in usable:

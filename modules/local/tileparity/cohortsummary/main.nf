@@ -13,7 +13,7 @@ process TILEPARITY_COHORT {
     tuple val(meta), path(files), val(samples_tsv)
 
     output:
-    tuple val(meta), path("${meta.id}.{long.tsv.gz,key.tsv,groups.tsv,genes.tsv.gz,ari_by_k.tsv,gene_partition.tsv,domains.tsv,texture_genes.tsv.gz,patch_sweep.tsv}"), optional: true, emit: tables
+    tuple val(meta), path("${meta.id}.{long.tsv.gz,key.tsv,groups.tsv,genes.tsv.gz,ari_by_k.tsv,partition.tsv,gene_partition.tsv,domains.tsv,texture_genes.tsv.gz,patch_sweep.tsv,patch_sweep_genes.tsv}"), optional: true, emit: tables
     tuple val(meta), path("${meta.id}.*.png")                                         , optional: true, emit: figures
     tuple val(meta), path("${meta.id}.report.html")                                   , emit: report
     tuple val(meta), path("${meta.id}.cohort.lineage.json")                          , emit: lineage
@@ -30,6 +30,7 @@ TILEPARITY_SAMPLES
         --prefix ${meta.id} \\
         --samples samples.tsv \\
         --process ${task.process} \\
+        --pipeline-version ${workflow.manifest.version} \\
         ${args}
 
     tp_versions.py "${task.process}" scipy pillow > versions.yml

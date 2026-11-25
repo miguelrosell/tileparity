@@ -12,7 +12,7 @@ import pandas as pd
 import pytest
 from scipy import sparse
 
-from tileparity_lib import cluster, cohort, lbp, markers, redundancy, relevance, texture_genes
+from tileparity_lib import cluster, cohort, lbp, markers, patchsweep, redundancy, relevance, texture_genes
 
 pytest.importorskip("igraph")
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -59,18 +59,74 @@ def test_empirical_p_and_its_floor():
     assert relevance.empirical_p(real, null) == pytest.approx([1 / 4, 3 / 4, 1.0])
 
 
-def test_per_gene_null_is_calibrated_for_noise_genes():
-    """Genes of pure (spatially smooth) noise must not beat the null more often than chance."""
+def _tissue(rng, H, W, thr=0.0, sigma=6):
+    """Tiles of an irregular tissue on an H x W grid."""
+    from scipy.ndimage import gaussian_filter
+
+    mask = gaussian_filter(rng.normal(size=(H, W)), sigma).ravel() > thr
+    return _grid_tiles(H, W)[mask].reset_index(drop=True), mask
+
+
+def test_patched_partners_cover_every_tile_and_start_from_their_move():
+    rng = np.random.default_rng(4)
+    tiles, _ = _tissue(rng, 40, 40)
+    moves = cluster.torus_pairs(tiles["row"], tiles["col"], 30, 0)
+    partners = cluster.patched_partners(moves, len(tiles), 0)
+    assert len(partners) == len(moves)
+    for (i, j), p in zip(moves, partners):
+        assert np.array_equal(p[i], j)  # the first piece is the move itself
+        assert ((p >= -1) & (p < len(tiles))).all()
+    cover = np.array([(p >= 0).mean() for p in partners])
+    assert np.median(cover) > 0.95
+
+
+def test_per_gene_null_holds_its_level_on_irregular_tissue():
+    """White and smooth noise genes, unrelated to a smooth 30-dimensional view: at most about 5 %
+    may beat the null at p < 0.05 (the 0.7.0 single-move null exceeded it at small overlap)."""
     rng = np.random.default_rng(3)
-    H, W = 24, 24
-    tiles = _grid_tiles(H, W)
-    X = _smooth(rng, H, W, 2.0, 6)
-    G = _smooth(rng, H, W, 2.0, 60)  # independent of X
+    H, W = 40, 46
+    tiles, mask = _tissue(rng, H, W, thr=0.02)
+    X = _smooth(rng, H, W, 2.5, 30)[mask]
+    G = np.hstack([rng.normal(size=(len(tiles), 150)), _smooth(rng, H, W, 2.0, 50)[mask]])
     folds = redundancy.spatial_folds(*redundancy.tile_centres_um(tiles, 0.5)[:2], 1000.0, 5, 0)
-    moves = cluster.torus_pairs(tiles["row"], tiles["col"], 39, 0)
+    partners, info = redundancy.null_partners(tiles, 59, 0)
+    assert info["coverage_median"] > 0.95
     r2 = redundancy.r2_scores(G, relevance.ridge_gcv_predict(X, G, folds))[1]
-    p = relevance.empirical_p(r2, relevance.gene_null(X, G, folds, moves))
-    assert (p < 0.05).mean() <= 0.15
+    p = relevance.empirical_p(r2, relevance.gene_null(X, G, folds, partners))
+    assert (p < 0.05).mean() <= 0.08
+
+
+def test_split_half_ceiling_matches_the_oracle():
+    """Counts drawn from smooth latent states: the ceiling (shared variance of the halves along
+    half B's axes) must match the R2 of the oracle E[half B | states], also at low depth, where
+    the old ceiling (half B predicted from half A) is far too low."""
+    from sklearn.decomposition import PCA
+
+    rng = np.random.default_rng(7)
+    H, W, n_genes = 30, 34, 150
+    n = H * W
+    L = _smooth(rng, H, W, 4.0, 4)
+    prop = np.exp(rng.normal(-1, 1.2, n_genes) + 0.7 * L @ rng.normal(size=(4, n_genes)))
+    prop /= prop.sum(axis=1, keepdims=True)
+    depth = 150 * np.exp(rng.normal(0, 0.3, n))
+    Y = sparse.csr_matrix(rng.poisson(depth[:, None] * prop))
+    A, B = relevance.split_halves(Y, 1)
+    ZB, idx = relevance.expression_genes(B.T, 120)
+    EB, shared, total = relevance.split_half_components(relevance.zscore_genes(A, idx), ZB, 20, 0)
+    ceiling = relevance.ceiling_of(shared, total)
+    NB = relevance.normalise(B)[:, idx].toarray()
+    mu, sd = NB.mean(axis=0), NB.std(axis=0, ddof=1)
+    sd[sd == 0] = 1
+    ok = ZB.std(axis=0) > 0
+    pca = PCA(n_components=EB.shape[1], random_state=0).fit(ZB[:, ok])
+    acc = np.zeros_like(EB)
+    for _ in range(40):
+        Bk = sparse.csr_matrix(rng.poisson(depth[:, None] * prop / 2))
+        acc += pca.transform(np.clip((relevance.normalise(Bk)[:, idx].toarray() - mu) / sd, -10, 10)[:, ok])
+    oracle = acc / 40 - (acc / 40).mean(axis=0)
+    truth = 1 - ((EB - oracle) ** 2).sum() / (EB**2).sum()
+    assert ceiling == pytest.approx(truth, abs=0.04)
+    assert 0.1 < truth < 0.8
 
 
 def test_relevance_gives_ceiling_pcs_reliability_and_gene_partition():
@@ -100,7 +156,8 @@ def test_relevance_gives_ceiling_pcs_reliability_and_gene_partition():
     gp = out["gene_partition"]
     pair = gp[(gp["view_a"] == "UNI2H_RGB") & (gp["view_b"] == "LBP_RGB")].set_index("gene_id")
     assert pair["only_a"].filter(like="g0", axis=0).iloc[0] > 0.2  # gene of a: only UNI2-h predicts it
-    assert np.allclose(pair["only_a"] + pair["only_b"] + pair["shared"], pair["r2_ab"])
+    assert np.allclose(pair["only_a"] + pair["only_b"] + pair["shared"], pair["r2_joint"])
+    assert np.allclose(pair["not_explained"], 1 - pair["r2_joint"])
     cat = relevance.gene_category(np.array([0.01, 0.01, 0.5, 0.5]), np.array([0.01, 0.5, 0.01, 0.5]))
     assert list(cat) == ["both", "only_x", "only_y", "neither"]
 
@@ -239,7 +296,58 @@ def test_cluster_step_writes_every_new_output_and_the_cohort_gathers_them(tmp_pa
     assert info["relevance"]["genes"]["null_moves"] == 9
     tp_cohort.main(["--input-dir", ".", "--prefix", "cohort_mpp0.5000"])
     for suffix in ("ari_by_k.tsv", "ari_by_k_corrected.png", "stability.png", "domains.tsv", "gene_partition.tsv",
-                   "texture_genes.tsv.gz", "report.html"):
+                   "partition.tsv", "partition.png", "gene_partition.png", "texture_genes.tsv.gz", "report.html"):
         assert (tmp_path / f"cohort_mpp0.5000.{suffix}").exists(), suffix
     dom = pd.read_csv(tmp_path / "cohort_mpp0.5000.domains.tsv", sep="\t")
     assert set(dom["sample"]) == {"A", "B"} and dom["markers"].str.len().gt(0).all()
+
+
+# ---- patch sweep, 0.7.1 ----------------------------------------------------------------------------------------
+def _sweep_cells(rng, n_side=96, n_genes=60, depth=40.0):
+    """Synthetic cells: LBP histograms (one channel, radii 1 and 2) and counts that both follow
+    a smooth latent field; genes 0-19 follow it, the rest are noise."""
+    from scipy.ndimage import gaussian_filter
+
+    spec = lbp.LbpSpec(radii=[1, 2], npoints=[lbp.npoints_for(1), lbp.npoints_for(2)], channels=["R"], tile_px=224)
+    z = gaussian_filter(rng.normal(size=(n_side, n_side)), 4).ravel()
+    z = (z - z.mean()) / z.std()
+    cr, cc = np.divmod(np.arange(n_side * n_side), n_side)
+    blocks = []
+    for P in spec.npoints:
+        prob = np.ones((len(z), P + 2))
+        prob[:, 0] += 2 * (z > 0)
+        prob[:, P] += 1 + np.clip(z, -0.9, None)
+        prob /= prob.sum(axis=1, keepdims=True)
+        blocks.append(np.vstack([rng.multinomial(256, q) for q in prob]))
+    Hc = np.hstack(blocks).astype(np.float32)
+    rate = np.full((len(z), n_genes), depth / n_genes)
+    rate[:, :20] *= np.exp(0.8 * z)[:, None]
+    Yc = sparse.csr_matrix(rng.poisson(rate))
+    return Hc, Yc, cr, cc, spec
+
+
+def test_patch_sweep_gives_a_ceiling_and_genes_one_by_one():
+    rng = np.random.default_rng(11)
+    Hc, Yc, cr, cc, spec = _sweep_cells(rng)
+    idx = patchsweep.gene_list(Yc, cr, cc, 4, 30)
+    assert len(idx) == 30 and set(range(20)) & set(idx.tolist())
+    rows = {}
+    genes = []
+    for n in (2, 8):
+        row, rad, gr = patchsweep.one_size(Hc, Yc, cr, cc, n, 16, 0.5, spec, 8, 10, 40, 4, 200.0, 0, [4], 100000, 20,
+                                           idx, np.array([f"g{i}" for i in idx]), np.array([f"G{i}" for i in idx]))
+        rows[n] = row
+        genes += gr
+    for row in rows.values():
+        assert 0 < row["r2_ceiling"] <= 1 and np.isfinite(row["fraction"]) and row["n_genes"] == 30
+        assert np.isfinite(row["fraction_genes"])
+    # larger patches: more molecules, so a higher ceiling (the fraction itself need not change)
+    assert rows[8]["r2_ceiling"] > rows[2]["r2_ceiling"]
+    g = pd.DataFrame(genes, columns=patchsweep.GENE_COLUMNS)
+    assert set(g["size_um"]) == {16.0, 64.0} and len(g) == 60  # cells of 16 px at 0.5 um/px = 8 um
+    linked = g[g["gene_id"].isin([f"g{i}" for i in range(20)]) & (g["size_um"] == 64.0)]
+    noise = g[~g["gene_id"].isin([f"g{i}" for i in range(20)]) & (g["size_um"] == 64.0)]
+    assert linked["ceiling"].mean() > noise["ceiling"].mean() + 0.1
+    svl = patchsweep.small_vs_large(g, small_max_um=16, large_min_um=64)
+    assert {"fraction_small", "fraction_large", "difference"} <= set(svl.columns)
+    assert (svl["difference"] == svl["fraction_small"] - svl["fraction_large"]).all()

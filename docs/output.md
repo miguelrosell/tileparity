@@ -75,14 +75,14 @@ With `--redundancy` (set `keep`; method in [design.md](design.md#optional-redund
 * `<id>.redundancy_maps_keep.png`: the H&E thumbnail and the per-tile unexplained part on the slide.
 * `<id>.cluster.json`: `redundancy` records the views, the folds and their sizes, the block size, the null and the bootstrap.
 
-Since 0.6.0 `redundancy.tsv` also has `r2_fold_min`, `r2_fold_max`, `r2_fold_sd` (R² of each fold's tiles), `r2_ci_low` and `r2_ci_high` (95 % block-bootstrap interval), `null_moves`, `r2_null_mean`, `r2_null_p95` and `p_null` (the spatial null: the predictor's map moved over the tile grid).
+Since 0.6.0 `redundancy.tsv` also has `r2_fold_min`, `r2_fold_max`, `r2_fold_sd` (R² of each fold's tiles), `r2_ci_low` and `r2_ci_high` (95 % block-bootstrap interval), `null_moves`, `r2_null_mean`, `r2_null_p95` and `p_null` (the spatial null: the predictor's map moved over the tile grid; since 0.7.1 every null map is a mosaic of a few moves covering almost every tile, fitted on the same tiles as the real map).
 
 With `--relevance` (set `keep`; method in [design.md](design.md#optional-relevance-what-the-image-predicts-of-the-expression---relevance)):
 
-* `<id>.relevance.tsv`: one row per predictor (`kind` = `view`, or `joint` for two views side by side, named `<a>+<b>`): `r2` of the expression's principal components, `r2_pc1` … `r2_pc5` (each component on its own), `r2_ci_low`, `r2_ci_high`, `r2_fold_sd`, for single views the spatial null (`r2_null_mean`, `r2_null_p95`, `p_null`), and the split-half noise ceiling: `r2_half` (half B's components from the view), `r2_ceiling` (from half A) and `fraction` = `r2_half` / `r2_ceiling`, the share of the reachable.
-* `<id>.relevance_partition.tsv`: per pair of views A, B: `r2_a`, `r2_b`, `r2_ab`, `unique_a` (= `r2_ab` − `r2_b`), `unique_b`, `shared`.
+* `<id>.relevance.tsv`: one row per predictor (`kind` = `view`, or `joint` for two views side by side, named `<a>+<b>`): `r2` of the expression's principal components, `r2_pc1` … `r2_pc5` (each component on its own), `r2_ci_low`, `r2_ci_high`, `r2_fold_sd`, for single views the spatial null (`r2_null_mean`, `r2_null_p95`, `p_null`), and the split-half noise ceiling: `r2_half` (half B's components from the view), `r2_ceiling` (since 0.7.1: the share of half B's variance that the two halves share, i.e. that is not sampling noise; until 0.7.0 the R² of half B from half A) and `fraction` = `r2_half` / `r2_ceiling`, the share of the reachable.
+* `<id>.relevance_partition.tsv`: per pair of views A, B: `r2_a`, `r2_b`, `r2_joint` (one regression on the components of both views), `only_a` (= `r2_joint` − `r2_b`), `only_b` (= `r2_joint` − `r2_a`), `shared` (= `r2_a` + `r2_b` − `r2_joint`), `not_explained` (= 1 − `r2_joint`). Until 0.7.0: `r2_ab`, `unique_a`, `unique_b`.
 * `<id>.relevance_genes.tsv.gz`: per gene (`gene_id`, `gene_name`): `split_half_r` and `reliability` (Spearman–Brown, roughly the largest R² its sampling noise allows); `r2_<view>` for every gene view, its null (`r2_null_mean_<view>`, `r2_null_sd_<view>`, `r2_null_p95_<view>`), `z_<view>` (for ranking), `p_<view>` (empirical, one-sided: (1 + moves reaching the real R²) / (1 + moves)) and `q_<view>` (Benjamini–Hochberg); `r2_<a>+<b>` and `adds_<b>_to_<a>` for UNI2-h + LBP and INTENSITY_HE + LBP.
-* `<id>.relevance_gene_partition.tsv.gz`: per gene and pair (UNI2H_RGB + LBP_RGB, INTENSITY_HE + LBP_RGB): `r2_a`, `r2_b`, `r2_ab`, `only_a`, `only_b`, `shared`, the q-values of both views and the reliability.
+* `<id>.relevance_gene_partition.tsv.gz`: per gene and pair (UNI2H_RGB + LBP_RGB, INTENSITY_HE + LBP_RGB): `r2_a`, `r2_b`, `r2_joint`, `only_a`, `only_b`, `shared`, `not_explained`, the q-values of both views, `split_half_r` and `reliability` (`r2_ab` until 0.7.0).
 * `<id>.relevance_keep.png`, `<id>.relevance_genes_keep.png` (genes coloured by which views beat the null: both, only LBP, only UNI2-h, neither), `<id>.relevance_gene_partition_keep.png`: the figures.
 
 With `--markers` (set `keep`):
@@ -105,9 +105,11 @@ With `--expression_thin_to`, `cluster.json` records the thinning (`expression_th
 
 ## `<sample>/mpp<scale>/patch_sweep/` — patch size of fastLBP (with `--patch_sweep`, Visium HD)
 
-* `<id>.patch_sweep.tsv`: one row per patch size: `size_um`, `cells_per_side`, `patch_px`, `n_patches`, `n_radii`, `max_radius_px`, `molecules_median` (molecules per patch), `r2_full` (expression's components from LBP) with `r2_full_ci_low`/`_high`, `r2_half` (half B from LBP), `r2_ceiling` (half B from half A), `fraction` (= `r2_half` / `r2_ceiling`, the share of the reachable) and `fraction_se`, `n_folds`, `ari_k<k>`.
+* `<id>.patch_sweep.tsv`: one row per patch size: `size_um`, `cells_per_side`, `patch_px`, `n_patches`, `n_radii`, `max_radius_px`, `molecules_median` (molecules per patch), `r2_full` (expression's components from LBP) with `r2_full_ci_low`/`_high`, `r2_half` (half B from LBP), `r2_ceiling` (the share of half B's variance the two halves share; until 0.7.0 half B from half A), `fraction` (= `r2_half` / `r2_ceiling`, the share of the reachable) and `fraction_se`, `n_folds`, `ari_k<k>`; since 0.7.1 also `n_genes`, `r2_genes_mean`, `ceiling_genes_mean` and `fraction_genes` (the genes followed one by one: sum of their R² / sum of their ceilings).
 * `<id>.patch_sweep_radius.tsv`: the same with one radius at a time (`size_um`, `radius_px`, `r2_half`, `fraction`).
-* `<id>.patch_sweep.json`: parameters, status and the sweet spot (the smallest size within one standard error of the largest `fraction`); `<id>.patch_sweep.png`: the figure.
+* `<id>.patch_sweep_genes.tsv.gz` (0.7.1): per size and gene of the fixed list: `r2_half` (the gene of half B from LBP), `ceiling` (its correlation between the halves) and `fraction` (only where the ceiling is at least 0.1).
+* `<id>.patch_sweep_genes_small_vs_large.tsv` (0.7.1): per gene measured at every small size: `fraction_small` (mean over sizes up to 32 µm), `fraction_large` (from 176 µm), `difference` (positive: relatively better with small patches), `ceiling_small`.
+* `<id>.patch_sweep.json`: parameters, status, the genes followed and the sweet spot (the smallest size within one standard error of the largest `fraction`); `<id>.patch_sweep.png`: the figure.
 
 ## `cohort/mpp<scale>/` — every slide together (with `--cluster`, `--cohort_summary`)
 
@@ -116,11 +118,12 @@ With `--expression_thin_to`, `cluster.json` records the thinning (`expression_th
 * `cohort_mpp<scale>.groups.tsv`: with a grouping column (`--cohort_group`): every key number per group (patients averaged), the test used (paired Wilcoxon, Mann–Whitney or Kruskal–Wallis) and its p-value.
 * `cohort_mpp<scale>.ari_by_k.tsv`: per method, view and k, the raw and corrected ARI with EXPRESSION over the slides (mean, median, lowest, highest, slides) and `best_k` (largest median corrected ARI).
 * `cohort_mpp<scale>.genes.tsv.gz`: every gene's R² from each view, mean over the slides, the number of slides, in how many it beats the null from each view (q < 0.05) and its mean reliability.
-* `cohort_mpp<scale>.gene_partition.tsv`: per slide and pair of views, the parts of R²(A+B) summed over the genes that beat the null (and over all genes) and their shares.
+* `cohort_mpp<scale>.partition.tsv` (0.7.1): per slide and pair of views, the partition of the expression's components (as each slide's `relevance_partition.tsv`).
+* `cohort_mpp<scale>.gene_partition.tsv`: per slide, pair of views and group of genes (`all`, `well_measured`: reliability ≥ 0.5), the mean over the genes of `only_a`, `shared`, `only_b`, `r2_joint`, `not_explained` and `reliability` (since 0.7.1; until 0.7.0 sums over the genes that beat the null and their shares).
 * `cohort_mpp<scale>.domains.tsv` (with `--markers`): per slide and method, the expression domains at the k shown with the F1 of every view and their best markers, to name the domains across slides.
 * `cohort_mpp<scale>.texture_genes.tsv.gz` (with `--texture_genes`): per feature and gene, the slides tested, the median rho and the slides with q < 0.05 of each sign.
-* `cohort_mpp<scale>.patch_sweep.tsv`: the patch sweeps of every slide (when run).
-* figures (`agreement`, `ari_by_k`, `ari_by_k_corrected`, `stability`, `f1`, `redundancy`, `relevance`, `gene_partition`, `texture_genes`, `groups`, `patch_sweep`) and `cohort_mpp<scale>.report.html`, one page with every figure, the key table, the expression domains and links to every slide's figures.
+* `cohort_mpp<scale>.patch_sweep.tsv`: the patch sweeps of every slide (when run); `cohort_mpp<scale>.patch_sweep_genes.tsv` (0.7.1): per gene, on how many slides it is predicted relatively better with small patches.
+* figures (`agreement`, `ari_by_k`, `ari_by_k_corrected`, `stability`, `f1`, `redundancy`, `relevance`, `partition`, `gene_partition`, `texture_genes`, `groups`, `patch_sweep`) and `cohort_mpp<scale>.report.html`, one page with every figure, the key table, the expression domains and links to every slide's figures.
 
 ## `export/mpp<scale>/`
 

@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.7.1 (2026-11-25)
+
+Fixes found in the first real run of 0.7.0 (colorectal folder), each checked against simulations with a known truth (`tests/python/test_analyses_070.py`), and the patch sweep gene by gene.
+
+**Statistics**
+
+* Noise ceiling (relevance and patch sweep): the ceiling is now the share of half B's variance that the two random halves share (their covariance along half B's component axes over half B's variance), i.e. the share that is not sampling noise. Until 0.7.0 it was the R² of half B predicted from half A, which counts half A's noise against the ceiling (about r² instead of r) and inflated the share of the reachable where molecules are few (above 1 for the colorectal slides thinned to 1 000 molecules per tile; in the patch sweep, most in the smallest patches). In simulation the new ceiling matches the oracle at every depth and the share of the reachable no longer depends on the depth.
+* Spatial null of R² (redundancy, relevance, per-gene relevance): every null realization is now a mosaic of a few moves that gives (almost) every tile a partner, fitted on the same tiles and folds as the real map. A single move keeps only part of the tiles, and an out-of-sample R² on fewer tiles is lower even by chance. In simulations the single-move null exceeded its level when moves kept few tiles (10.5 % of noise genes with p < 0.05 at 34 % overlap); the mosaic null keeps it at every overlap (3 %) and has more power. On the colorectal slides the moves keep 64–83 % of the tiles, where the single-move null was nearly calibrated.
+* Corrected ARI: unchanged (its single-move null is conservative when moves keep few tiles, and nearly exact above 60 %; mosaics would err the other way). `cluster.json` now records the moves' `overlap_median`.
+
+**Patch sweep**
+
+* Genes one by one: a fixed list of genes (`--patch_sweep_genes`, 500, the most variable at `--patch_sweep_gene_size_um`, 112 µm) followed at every size, each with its own ceiling: `fraction_genes` per size, `patch_sweep_genes.tsv.gz` per gene and size, `patch_sweep_genes_small_vs_large.tsv` (is a gene predicted relatively better with small patches?), a new panel in the figure, and in the cohort `patch_sweep_genes.tsv` (on how many slides).
+
+**Figures and tables**
+
+* Partition (joint model, shared, only A, only B): columns renamed to say what they are (`r2_joint`, `only_a`, `only_b`, `shared`, `not_explained`; until 0.7.0 `r2_ab`, `unique_a`, `unique_b`), and every figure draws the whole variance from 0 to 1 with the part neither view predicts, instead of shares that summed to 1. The per-gene figure averages over all genes and over the well-measured ones (reliability ≥ 0.5) with the reliability as a tick; the cohort has the partition of the expression's components (`partition.png`, `partition.tsv`) and of the genes (`gene_partition.png`).
+* Cohort texture figure: the columns are ordered by type and radius (they followed the table's order).
+* Captions explain q (Benjamini–Hochberg) and the colour scale of the texture heatmaps (saturated at the 98th percentile of |rho| shown; rho ranges from −1 to 1).
+
 ## 0.7.0 (2026-11-24)
 
 The analyses agreed after the 0.6.0 results: correct p-values for the genes, a noise ceiling for the expression, what UNI2-h sees beyond LBP texture gene by gene, the expression domains named by their markers, and named texture features against genes. Core outputs and defaults unchanged; one default of `--relevance` changed (`--relevance_gene_null_shifts` 20 → 199).

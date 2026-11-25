@@ -18,11 +18,22 @@ running fastLBP again for every size.
    are left out; every radius is also used alone.
 4. Noise ceiling. Small patches hold few molecules, so their expression is noisy and any
    predictor does worse. Every patch's molecules are split at random into two halves
-   (binomial thinning); half B's components are predicted from LBP and from half A. The
-   R^2 from half A is the most any predictor can reach at that size;
-   ``fraction`` = R^2(B from LBP) / R^2(B from A) is the share of the reachable that LBP
-   reaches, comparable between sizes.
-5. Agreement: ARI between k-means clusters of LBP and of the expression at every size.
+   (binomial thinning): given the tissue, two independent samples of it. Half B is prepared
+   like the expression, half A on the same genes and projected on half B's component axes;
+   the variance the halves share along those axes, over half B's variance, is the share of
+   half B that is not sampling noise (``r2_ceiling``: the most any predictor that does not
+   see half B's molecules can reach; see :func:`tileparity_lib.relevance.split_half_components`).
+   ``fraction`` = R^2(half B from LBP) / r2_ceiling is the share of the reachable that LBP
+   reaches; it does not depend on the number of molecules, so it is comparable between sizes.
+   (Until 0.7.0 the ceiling was the R^2 of half B predicted from half A, which counts half
+   A's noise against the ceiling and inflated the fraction where molecules are few.)
+5. Gene by gene (0.7.1): one fixed list of genes, the most variable at a reference size
+   (``--gene-size-um``, the tile of the main analysis), at every size: each gene of half B
+   predicted from LBP (ridge, one penalty per gene) and its own ceiling, the correlation of
+   the gene between the halves. ``fraction_genes`` = sum of the genes' R^2 / sum of their
+   ceilings (the share of the genes' reachable variance that LBP predicts); per gene, its
+   R^2, ceiling and fraction (only where the ceiling is at least 0.1).
+6. Agreement: ARI between k-means clusters of LBP and of the expression at every size.
 
 The sweet spot reported is the smallest size whose ``fraction`` is within one standard
 error (over the folds) of the largest ``fraction``.
@@ -42,7 +53,9 @@ from . import redundancy as R
 
 TABLE_COLUMNS = ["size_um", "cells_per_side", "patch_px", "n_patches", "n_radii", "max_radius_px", "molecules_median",
                  "r2_full", "r2_full_ci_low", "r2_full_ci_high", "r2_half", "r2_ceiling", "fraction", "fraction_se",
-                 "n_folds"]
+                 "n_folds", "n_genes", "r2_genes_mean", "ceiling_genes_mean", "fraction_genes"]
+GENE_COLUMNS = ["size_um", "gene_id", "gene_name", "r2_half", "ceiling", "fraction"]
+MIN_GENE_CEILING = 0.1  # a gene's fraction is reported only where its ceiling reaches this
 
 
 def parse_sizes(text: str, cell_um: float) -> list[int]:
@@ -174,11 +187,38 @@ def _pcs(X: np.ndarray, n: int, seed: int) -> np.ndarray:
     return pca(X, n, seed)[0]
 
 
+def gene_list(Yc: sparse.csr_matrix, cr, cc, n_ref: int, n_genes: int) -> np.ndarray:
+    """Indices of the ``n_genes`` most variable genes of the patches of ``n_ref`` cells a side
+    (the list used at every size)."""
+    from .cluster import highly_variable_genes
+    from .relevance import normalise
+
+    M, _, _ = patches(cr, cc, n_ref)
+    if M.shape[0] < 20 or n_genes <= 0:
+        return np.zeros(0, int)
+    return np.asarray(highly_variable_genes(normalise(M @ Yc), n_genes), int)
+
+
+def genes_at_size(A: sparse.csr_matrix, B: sparse.csr_matrix, idx: np.ndarray, P_lbp: np.ndarray,
+                  folds: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """(R^2 of every gene of half B from LBP, its ceiling = shared / total variance of the gene
+    in the two halves); NaN for a gene without variance in half B."""
+    from .relevance import _r2_columns, ridge_gcv_predict, zscore_genes
+
+    zA, zB = zscore_genes(A, idx), zscore_genes(B, idx)
+    zA -= zA.mean(axis=0)
+    zB -= zB.mean(axis=0)
+    tot = (zB**2).sum(axis=0)
+    ceiling = np.where(tot > 0, (zA * zB).sum(axis=0) / np.where(tot > 0, tot, 1.0), np.nan)
+    r2 = _r2_columns(zB, ridge_gcv_predict(P_lbp, zB, folds))
+    return r2, ceiling
+
+
 def one_size(Hc: np.ndarray, Yc: sparse.csr_matrix, cr, cc, n: int, cell_px: int, mpp: float, spec, max_radius: int,
              n_pcs: int, n_hvg: int, n_folds: int, block_um: float, seed: int, ks, max_patches: int,
-             n_boot: int) -> tuple[dict, list[dict]]:
+             n_boot: int, gene_idx=None, gene_ids=None, gene_names=None) -> tuple[dict, list[dict], list[dict]]:
     from .cluster import ari, kmeans
-    from .relevance import expression_genes
+    from .relevance import ceiling_of, expression_genes, split_half_components, zscore_genes
 
     M, pr, pc = patches(cr, cc, n)
     patch_px = n * cell_px
@@ -190,7 +230,7 @@ def one_size(Hc: np.ndarray, Yc: sparse.csr_matrix, cr, cc, n: int, cell_px: int
         pick = np.sort(rng.choice(M.shape[0], max_patches, replace=False))
         M, pr, pc = M[pick], pr[pick], pc[pick]
     if M.shape[0] < 20 or not radii:
-        return row, []
+        return row, [], []
     Hp = np.asarray(M @ Hc.astype(np.float32))
     Yp = sparse.csr_matrix(M @ Yc)
     Yp.data = np.round(Yp.data)
@@ -203,7 +243,7 @@ def one_size(Hc: np.ndarray, Yc: sparse.csr_matrix, cr, cc, n: int, cell_px: int
     y_um = (pr + 0.5) * patch_px * mpp
     folds = R.spatial_folds(x_um, y_um, block_um, n_folds, seed)
     if folds is None:
-        return row, []
+        return row, [], []
     blocks = R.spatial_blocks(x_um, y_um, block_um)
     row["n_folds"] = int(folds.max()) + 1
     pred, _ = R.cross_predict(P_lbp, E, folds)
@@ -211,23 +251,24 @@ def one_size(Hc: np.ndarray, Yc: sparse.csr_matrix, cr, cc, n: int, cell_px: int
     boot = R.block_bootstrap_r2(E, pred, blocks, n_boot, seed)
     row["r2_full_ci_low"] = float(np.nanpercentile(boot, 2.5)) if boot.size else np.nan
     row["r2_full_ci_high"] = float(np.nanpercentile(boot, 97.5)) if boot.size else np.nan
-    # split halves: half B predicted from LBP and from half A
+    # split halves: half B predicted from LBP; its ceiling from the variance the halves share
     A = Yp.copy()
     A.data = rng.binomial(A.data.astype(np.int64), 0.5).astype(float)
     B = Yp - A
+    A.eliminate_zeros()
     B.eliminate_zeros()
-    ZA, _ = expression_genes(sparse.csr_matrix(A).T, n_hvg)
-    ZB, _ = expression_genes(sparse.csr_matrix(B).T, n_hvg)
-    EA, EB = _pcs(ZA.astype(np.float32), n_pcs, seed), _pcs(ZB.astype(np.float32), n_pcs, seed)
+    ZB, idx_b = expression_genes(sparse.csr_matrix(B).T, n_hvg)
+    ZA = zscore_genes(A, idx_b)
+    EB, shared, total = split_half_components(ZA, ZB, n_pcs, seed)
+    ceiling = ceiling_of(shared, total)
     pl, _ = R.cross_predict(P_lbp, EB, folds)
-    pa, _ = R.cross_predict(EA, EB, folds)
     row["r2_half"] = R.r2_scores(EB, pl)[0]
-    row["r2_ceiling"] = R.r2_scores(EB, pa)[0]
-    fl, fa = R.fold_r2(EB, pl, folds), R.fold_r2(EB, pa, folds)
-    frac = fl / np.where(fa > 0, fa, np.nan)
-    row["fraction"] = row["r2_half"] / row["r2_ceiling"] if row["r2_ceiling"] > 0 else np.nan
-    row["fraction_se"] = float(np.nanstd(frac, ddof=1) / math.sqrt(np.isfinite(frac).sum())) if np.isfinite(frac).sum() > 1 \
-        else np.nan
+    row["r2_ceiling"] = ceiling
+    ok_c = np.isfinite(ceiling) and ceiling > 0
+    row["fraction"] = row["r2_half"] / ceiling if ok_c else np.nan
+    frac = R.fold_r2(EB, pl, folds) / ceiling if ok_c else np.array([np.nan])
+    row["fraction_se"] = (float(np.nanstd(frac, ddof=1) / math.sqrt(np.isfinite(frac).sum()))
+                          if np.isfinite(frac).sum() > 1 else np.nan)
     for k in ks:
         if M.shape[0] >= 2 * k:
             row[f"ari_k{k}"] = ari(kmeans(P_lbp, k, seed), kmeans(E, k, seed))
@@ -235,9 +276,46 @@ def one_size(Hc: np.ndarray, Yc: sparse.csr_matrix, cr, cc, n: int, cell_px: int
     for r, cols in by_radius.items():
         Pr = _pcs(X[:, cols], min(n_pcs, len(cols)), seed)
         pr_, _ = R.cross_predict(Pr, EB, folds)
-        rad_rows.append({"size_um": row["size_um"], "radius_px": r, "r2_half": R.r2_scores(EB, pr_)[0],
-                         "fraction": R.r2_scores(EB, pr_)[0] / row["r2_ceiling"] if row["r2_ceiling"] > 0 else np.nan})
-    return row, rad_rows
+        r2r = R.r2_scores(EB, pr_)[0]
+        rad_rows.append({"size_um": row["size_um"], "radius_px": r, "r2_half": r2r,
+                         "fraction": r2r / ceiling if ok_c else np.nan})
+    gene_rows = []
+    if gene_idx is not None and len(gene_idx):
+        r2g, ceil_g = genes_at_size(A, B, gene_idx, P_lbp, folds)
+        ok = np.isfinite(ceil_g)
+        r2_sum, ceil_sum = float(np.nansum(np.where(ok, r2g, 0.0))), float(np.nansum(np.where(ok, ceil_g, 0.0)))
+        row.update({"n_genes": int(len(gene_idx)), "r2_genes_mean": r2_sum / len(gene_idx),
+                    "ceiling_genes_mean": ceil_sum / len(gene_idx),
+                    "fraction_genes": r2_sum / ceil_sum if ceil_sum > 0 else np.nan})
+        for g in range(len(gene_idx)):
+            c = ceil_g[g]
+            gene_rows.append({"size_um": row["size_um"], "gene_id": gene_ids[g] if gene_ids is not None else gene_idx[g],
+                              "gene_name": gene_names[g] if gene_names is not None else "", "r2_half": r2g[g],
+                              "ceiling": c, "fraction": r2g[g] / c if np.isfinite(c) and c >= MIN_GENE_CEILING else np.nan})
+    return row, rad_rows, gene_rows
+
+
+def small_vs_large(genes: pd.DataFrame, small_max_um: float = 32.0, large_min_um: float = 176.0) -> pd.DataFrame:
+    """Per gene: mean fraction over the small sizes (<= ``small_max_um``) and over the large
+    ones (>= ``large_min_um``), for genes whose ceiling reaches the minimum at every small
+    size; ``difference`` = small - large (positive: LBP predicts the gene better, relative to
+    what its molecules allow, with small patches)."""
+    if genes is None or genes.empty:
+        return pd.DataFrame(columns=["gene_id", "gene_name", "fraction_small", "fraction_large", "difference",
+                                     "ceiling_small"])
+    small = genes[genes["size_um"] <= small_max_um]
+    large = genes[genes["size_um"] >= large_min_um]
+    if small.empty or large.empty:
+        return pd.DataFrame(columns=["gene_id", "gene_name", "fraction_small", "fraction_large", "difference",
+                                     "ceiling_small"])
+    measured = small.groupby("gene_id")["fraction"].apply(lambda f: f.notna().all())
+    s = small.groupby(["gene_id", "gene_name"]).agg(fraction_small=("fraction", "mean"), ceiling_small=("ceiling", "mean"))
+    lg = large.groupby(["gene_id", "gene_name"]).agg(fraction_large=("fraction", "mean"))
+    out = s.join(lg).reset_index()
+    out = out[out["gene_id"].map(measured).fillna(False).astype(bool)]
+    out["difference"] = out["fraction_small"] - out["fraction_large"]
+    return out.sort_values("difference", ascending=False)[["gene_id", "gene_name", "fraction_small", "fraction_large",
+                                                            "difference", "ceiling_small"]]
 
 
 def sweet_spot(table: pd.DataFrame) -> dict:

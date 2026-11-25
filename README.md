@@ -185,14 +185,14 @@ A new extractor is one module that reads `[meta, resampled.tif, tiles.tsv.gz, pr
 
 ## Status and roadmap
 
-Version 0.7.0 (changes in [CHANGELOG.md](CHANGELOG.md)). What has been run so far:
+Version 0.7.1 (changes in [CHANGELOG.md](CHANGELOG.md)). What has been run so far:
 
-* the Python library: 129 unit tests, including LBP histograms identical to fastLBP's whole-image run, the H&E-only image against a direct computation, and the clustering's expression recipe, neighbour graph and Leiden partition identical to Scanpy's;
+* the Python library: 132 unit tests, including LBP histograms identical to fastLBP's whole-image run, the H&E-only image against a direct computation, and the clustering's expression recipe, neighbour graph and Leiden partition identical to Scanpy's;
 * real samples at 0.5 µm/px on the UZH server (conda route, one SLURM job, UNI2-h in fp16 on an NVIDIA L4): a Visium HD colorectal cancer slide and the HEST-1k Visium sample ZEN36 with tileparity 0.3.0 to 0.4.1, then four slides with 0.5.0 (`--cluster --redundancy`, three LBP preparations). The slide labelled P1 in those runs is patient P2's section processed a second time by 10x Genomics (see [docs/decisions.md](docs/decisions.md)); it served as a technical replicate. The 0.4.1 run recomputed every step and gave exactly the same cluster labels as the 0.4.0 run in every view, UNI2-h included;
 * the whole workflow on the synthetic test data without containers, with every option of the test profile switched on, with Nextflow 25.04.0 and 26.10.3; stub runs and `nextflow lint` with recent Nextflow versions (the linter of 25.04.0 wrongly reports `meta` as undefined in `conf/modules.config`);
 * GitHub Actions: `CI` runs the unit tests, a stub run with the oldest supported and the latest Nextflow, and lint with the latest, on every push; `Containers` builds the three images and runs the test profile inside them in Docker.
 
-The analyses added in 0.6.0 (corrected ARI, the k shown, F1, stability, galleries, cohort summary, relevance, patch sweep) have been run on synthetic data so far; their first real runs are the colorectal cancer slides P1, P2 and P5 (Visium HD, with the patch sweep) and the inflammatory skin cohort from HEST-1k (`assets/cohort_c_skin_hest.tsv`: 50 sections of 13 patients, lesional and non-lesional skin) ([docs/rolandgarros.md](docs/rolandgarros.md), sections 13 and 14). The analyses added in 0.7.0 (the corrected per-gene null, the noise ceiling, the gene partition, domain markers, texture features against genes, count thinning) have been run on synthetic data; their first real run is the colorectal folder ([docs/rolandgarros.md](docs/rolandgarros.md), section 15).
+The analyses added in 0.6.0 (corrected ARI, the k shown, F1, stability, galleries, cohort summary, relevance, patch sweep) have been run on synthetic data so far; their first real runs are the colorectal cancer slides P1, P2 and P5 (Visium HD, with the patch sweep) and the inflammatory skin cohort from HEST-1k (`assets/cohort_c_skin_hest.tsv`: 50 sections of 13 patients, lesional and non-lesional skin) ([docs/rolandgarros.md](docs/rolandgarros.md), sections 13 and 14). The analyses added in 0.7.0 (per-gene null, noise ceiling, gene partition, domain markers, texture features against genes, count thinning) were run on the colorectal folder ([docs/rolandgarros.md](docs/rolandgarros.md), section 15); 0.7.1 fixes the noise ceiling and the spatial null of R² found there and adds the patch sweep gene by gene (section 16).
 
 Not yet implemented:
 

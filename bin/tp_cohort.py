@@ -18,7 +18,7 @@ import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
 from PIL import Image  # noqa: E402
 
-from tileparity_lib import cluster, clusterplots, cohort, figures, lineage  # noqa: E402
+from tileparity_lib import cluster, clusterplots, cohort, figures, lineage, relevance  # noqa: E402
 
 log = logging.getLogger("tp_cohort")
 GROUP_COLOURS = [(0, 114, 178), (213, 94, 0), (0, 158, 115), (204, 121, 167), (230, 159, 0), (86, 180, 233),
@@ -95,25 +95,30 @@ def stability_cohort_figure(long: pd.DataFrame, method: str, ref: str, column: s
                               x_ticks=sorted(t["k"].unique()))
 
 
-def gene_partition_cohort_figure(gpt: pd.DataFrame, view_a: str = "UNI2H_RGB", view_b: str = "LBP_RGB") -> Image.Image | None:
-    t = gpt[(gpt["view_a"] == view_a) & (gpt["view_b"] == view_b)] if len(gpt) else gpt
-    if t is None or t.empty:
-        return None
-    ca = clusterplots.VIEW_COLOURS.get(view_a, figures.SERIES[0])
-    cb = clusterplots.VIEW_COLOURS.get(view_b, figures.SERIES[1])
-    rows = []
-    for r in t.itertuples(index=False):
-        if r.n_genes_sig > 0:
-            rows.append({"label": r.sample, "segments": [(r.share_only_a, ca), (r.share_shared, (150, 150, 150)),
-                                                         (r.share_only_b, cb)],
-                         "text": f"{r.n_genes_sig} genes: only A {r.share_only_a:.0%} | both {r.share_shared:.0%} | "
-                                 f"only B {r.share_only_b:.0%}"})
-        else:
-            rows.append({"label": r.sample, "segments": [], "text": "no gene beats the spatial null"})
-    chart = figures.hbar_chart(rows, "share of the summed R2 of the genes that beat the null", x_range=(0.0, 1.0),
-                               width=1000)
-    items = [(ca, f"only {view_a} (A)"), ((150, 150, 150), "both"), (cb, f"only {view_b} (B)")]
-    return figures.stack([chart, figures.legend(items, width=1000)])
+def partition_cohort_figure(table: pd.DataFrame, pairs, key: str, label: str, marker_col: str | None = None):
+    """One panel per pair of views: one bar per slide, the variance split into only A, shared,
+    only B and not explained (absolute, 0 to 1)."""
+    panels = []
+    for a, b in pairs:
+        t = table[(table["view_a"] == a) & (table["view_b"] == b)] if len(table) else table
+        if t is None or t.empty:
+            continue
+        ca = clusterplots.VIEW_COLOURS.get(a, figures.SERIES[0])
+        cb = clusterplots.VIEW_COLOURS.get(b, figures.SERIES[1])
+        rows = []
+        for r in t.itertuples(index=False):
+            g = r._asdict()
+            pre = "mean_" if key == "genes" else ""
+            marker = g.get(marker_col, np.nan) if marker_col else np.nan
+            extra = f"{marker_col.replace('mean_', 'mean ')} {marker:.2f}" if marker_col and np.isfinite(marker) else ""
+            name = g["sample"] + (f" ({g['n_genes']} genes)" if key == "genes" else "")
+            rows.append(clusterplots.partition_row(name, g[f"{pre}only_a"], g[f"{pre}shared"], g[f"{pre}only_b"],
+                                                   g[f"{pre}r2_joint"], ca, cb, marker=marker, extra=extra))
+        chart = figures.hbar_chart(rows, label, x_range=(0.0, 1.0), width=1180)
+        panels.append(figures.stack([figures.title_strip(1180, f"A = {a}, B = {b}", 14), chart,
+                                     clusterplots.partition_legend(a, b, 1180, "black tick: mean reliability (the most "
+                                                                               "the genes' noise allows)" if marker_col else None)]))
+    return figures.stack(panels) if panels else None
 
 
 def redundancy_figure(long: pd.DataFrame) -> Image.Image | None:
@@ -177,6 +182,10 @@ def main(argv=None):
     if len(gpt):
         files["gene_partition"] = f"{out}.gene_partition.tsv"
         gpt.to_csv(files["gene_partition"], sep="\t", index=False, na_rep="NA", float_format="%.6g")
+    ppt = cohort.partition_table(slides)
+    if len(ppt):
+        files["partition"] = f"{out}.partition.tsv"
+        ppt.to_csv(files["partition"], sep="\t", index=False, na_rep="NA", float_format="%.6g")
     domains = cohort.domains_table(slides)
     if len(domains):
         files["domains"] = f"{out}.domains.tsv"
@@ -333,20 +342,39 @@ def main(argv=None):
                  "reachable has noisy expression (few molecules per tile), not a blind image."),
             caveats="Linear prediction; what each view adds to another: long.tsv.gz (relevance_partition).",
             source=source, min_width=1000)
-    f = gene_partition_cohort_figure(gpt) if len(gpt) else None
+    pairs = [("UNI2H_RGB", "LBP_RGB"), ("INTENSITY_HE", "LBP_RGB")]
+    f = partition_cohort_figure(ppt, pairs, "components", "share of the expression's variance (its components)") \
+        if len(ppt) else None
+    if f is not None:
+        figs["partition"] = figures.with_caption(
+            f, title=f"What each view adds to the other for the expression as a whole, {n} slides",
+            what=("Per slide, the variance of the expression's principal components split by what two image views "
+                  "predict (ridge regression, spatial cross-validation): the joint model is one regression on the "
+                  "components of both views; only A = R2(joint) - R2(B), only B = R2(joint) - R2(A), shared = R2(A) + "
+                  "R2(B) - R2(joint), and not explained = 1 - R2(joint). Only A + shared + only B = R2(joint)."),
+            how=("Read each bar from the left: what only A predicts, what both predict, what only B predicts, and the rest "
+                 "that neither predicts. With UNI2-h and LBP, a short orange part means texture adds nothing to UNI2-h; "
+                 "with INTENSITY_HE and LBP, the orange part is what texture adds to the mere amount of stain."),
+            caveats=("Linear models on principal components: 'only UNI2-h' is what UNI2-h predicts beyond the LBP "
+                     "histograms, not beyond texture in general. Out-of-sample R2 is noisy, so very small parts (and "
+                     "negative ones, drawn as 0) mean little. Values: partition.tsv."),
+            source=source, min_width=1200)
+    wm = gpt[gpt["genes"] == "well_measured"] if len(gpt) else gpt
+    f = partition_cohort_figure(wm, pairs, "genes", "mean over the well-measured genes of the share of the gene's variance",
+                                marker_col="mean_reliability") if len(gpt) else None
     if f is not None:
         figs["gene_partition"] = figures.with_caption(
-            f, title=f"What UNI2-h and LBP predict of the genes, {n} slides",
-            what=("Per slide, for the genes that beat the per-gene spatial null from UNI2H_RGB or LBP_RGB: the R2 of "
-                  "both views together split into only UNI2-h (R2(both) - R2(LBP)), both (R2(UNI2-h) + R2(LBP) - "
-                  "R2(both)) and only LBP (R2(both) - R2(UNI2-h)), summed over the genes (parts below 0 counted as 0) "
-                  "and shown as shares."),
-            how=("A large 'only UNI2-h' share: much of what the image says about the genes is beyond the LBP "
-                 "histograms; a large 'both' share: UNI2-h's view of these genes is mostly texture that LBP also "
-                 "captures."),
-            caveats=("Linear models on principal components. Genes and their numbers differ between slides. Per gene "
-                     "and slide: each slide's relevance_gene_partition.tsv.gz; per slide: gene_partition.tsv."),
-            source=source, min_width=1100)
+            f, title=f"What each view predicts of the genes, {n} slides",
+            what=("Per slide, for the genes whose reliability (split-half correlation stepped up to full depth) is at least "
+                  "0.5, the mean over the genes of every part of the gene's variance (z-scores, 1 per gene): only A, "
+                  "shared, only B (as for the expression as a whole, gene by gene) and not explained; black tick: the "
+                  "genes' mean reliability, roughly the most any predictor could reach."),
+            how=("The space between the end of the coloured parts and the tick is expression the image misses although "
+                 "the molecules would allow it; beyond the tick is sampling noise. The genes are chosen by their "
+                 "reliability, which does not use the image, so the choice does not favour either view."),
+            caveats=("Each slide has its own most variable genes. Linear models; small parts mean little. All genes and the "
+                     "well-measured ones: gene_partition.tsv; per gene: each slide's relevance_gene_partition.tsv.gz."),
+            source=source, min_width=1200)
     if len(texture):
         rep = texture.assign(q=np.where(texture["slides_sig_same_sign"] >= max(2, int(np.ceil(n / 2))), 0.0, 1.0),
                              rho=texture["rho_median"], n_eff=texture["n_eff_median"], p=np.nan, n_tiles=n)
@@ -356,7 +384,9 @@ def main(argv=None):
             "what": (f"For every named LBP texture feature and gene, the median over the {n} slides of the partial "
                      "Spearman correlation (depth removed); a dot where the association reaches q < 0.05 with the same "
                      f"sign in at least {max(2, int(np.ceil(n / 2)))} slides (replicated). a: the genes with the "
-                     "strongest replicated associations; b: per feature, the number of replicated genes."),
+                     "strongest replicated associations (colour saturated at the 98th percentile of |rho| shown; rho "
+                     "itself ranges from -1 to 1); b: per feature, the number of replicated genes. "
+                     + relevance.Q_EXPLAINED),
             "how": ("A dot is an association seen again on other slides, not only on one; the radius where a type "
                     "peaks in b is the scale of the structure that goes with the genes."),
             "caveats": ("Each slide's most variable genes differ, so a gene can be tested on fewer slides (column "
@@ -424,21 +454,53 @@ def main(argv=None):
         series.append({"name": "mean of the slides", "x": mean["size_um"].to_numpy(float),
                        "y": mean["fraction"].to_numpy(float), "colour": (0, 0, 0)})
         xs = sorted(sw["size_um"].unique())
+        ticks = [x for x in (16, 32, 48, 64, 96, 112, 128, 160, 192, 224) if xs[0] <= x <= xs[-1]]
         chart = figures.line_chart(series, "patch side (um)", "share of the reachable (R2 from LBP / ceiling)",
-                                   size=(900, 420), y_range=(0.0, 1.0),
-                                   x_ticks=[x for x in (16, 32, 48, 64, 96, 112, 128, 160, 192, 224) if xs[0] <= x <= xs[-1]],
+                                   size=(620, 420), y_range=(0.0, 1.0), x_ticks=ticks,
                                    v_lines=[(spot["sweet_spot_um"], f"sweet spot {spot['sweet_spot_um']:g} um")] if spot else None)
+        panels = [figures.stack([figures.title_strip(620, "a. The expression's components", 14), chart])]
+        if "fraction_genes" in sw and sw["fraction_genes"].notna().any():
+            gser = []
+            for i, (smp, g) in enumerate(sw.groupby("sample", sort=False)):
+                g = g.dropna(subset=["fraction_genes"]).sort_values("size_um")
+                gser.append({"name": smp, "x": g["size_um"].to_numpy(float), "y": g["fraction_genes"].to_numpy(float),
+                             "colour": colour_of.get(smp, GROUP_COLOURS[i % len(GROUP_COLOURS)])})
+            gchart = figures.line_chart(gser, "patch side (um)", "share of the reachable, genes one by one", size=(620, 420),
+                                        y_range=(0.0, 1.0), x_ticks=ticks)
+            panels.append(figures.stack([figures.title_strip(620, "b. Genes one by one (the same genes at every size)",
+                                                             14), gchart]))
+        body = figures.stack([clusterplots._side_by_side(panels),
+                              figures.legend([(x["colour"], x["name"]) for x in series], width=1240)])
         figs["patch_sweep"] = figures.with_caption(
-            figures.stack([chart, figures.legend([(x["colour"], x["name"]) for x in series], width=900)]),
-            title=f"Patch size of fastLBP across {len(sweeps)} Visium HD slides",
-            what=("For every Visium HD slide (lines) and their mean (black), the share of the reachable: R2 of the "
-                  "expression (half of every patch's molecules) predicted from LBP, divided by the R2 reached from the "
-                  "other half of the molecules, for patches of every size (LBP counted per 8 um cell and summed). "
-                  + (f"Sweet spot of the mean: {spot['sweet_spot_um']:g} um (the smallest size within one standard "
+            body, title=f"Patch size of fastLBP across {len(sweeps)} Visium HD slides",
+            what=("For every Visium HD slide (lines) and their mean (black), the share of the reachable for patches of every "
+                  "size (LBP counted per 8 um cell and summed; the same radii at every size): R2 of half of every patch's "
+                  "molecules predicted from LBP, divided by the share of that half that is not sampling noise (the "
+                  "variance the two random halves share). a: the expression's principal components at that size; b: "
+                  "each slide's most variable genes at 112 um, the same genes at every size, each predicted on its own "
+                  "(sum of R2 / sum of ceilings). "
+                  + (f"Sweet spot of the mean (a): {spot['sweet_spot_um']:g} um (the smallest size within one standard "
                      "error, over the slides, of the largest mean)." if spot else "")),
-            how=("Where the curves peak, texture says most about the expression relative to what the molecules allow; a "
-                 "common peak across slides is a size to use for LBP."),
-            caveats="Few slides; see each slide's patch_sweep.png for the intervals and the radii.", source=source)
+            how=("Where the curves peak, texture says most about the expression relative to what the molecules allow. If "
+                 "b peaked at smaller sizes than a, individual genes would profit from small patches although the "
+                 "expression's main axes do not."),
+            caveats=("Few slides; see each slide's patch_sweep.png for the intervals, the radii and the genes one by one. "
+                     "Genes better with small patches on several slides: patch_sweep_genes.tsv."),
+            source=source, min_width=1240)
+        svls = []
+        for f in sorted(d.glob("*.patch_sweep_genes_small_vs_large.tsv")):
+            t = pd.read_csv(f, sep="\t")
+            if len(t):
+                svls.append(t.assign(sample=f.name[: -len(".patch_sweep_genes_small_vs_large.tsv")].rsplit("_mpp", 1)[0]))
+        if svls:
+            sv = pd.concat(svls, ignore_index=True)
+            rep = sv.groupby(["gene_id", "gene_name"]).agg(
+                slides=("sample", "nunique"), slides_better_small=("difference", lambda x: int((x > 0).sum())),
+                difference_mean=("difference", "mean"), fraction_small_mean=("fraction_small", "mean"),
+                fraction_large_mean=("fraction_large", "mean")).reset_index()
+            rep = rep.sort_values(["slides_better_small", "difference_mean"], ascending=[False, False])
+            files["patch_sweep_genes"] = f"{out}.patch_sweep_genes.tsv"
+            rep.to_csv(files["patch_sweep_genes"], sep="\t", index=False, na_rep="NA", float_format="%.6g")
     for name, img in figs.items():
         path = f"{out}.{name}.png"
         img.save(path)

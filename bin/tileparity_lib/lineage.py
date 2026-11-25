@@ -175,6 +175,9 @@ def add_cli(ap) -> None:
     ap.add_argument("--process", default=None, help="Nextflow process name, recorded in the lineage file")
     ap.add_argument("--lineage-parent", action="append", default=[],
                     help="lineage file of a step whose outputs are inputs here (repeatable)")
+    ap.add_argument("--pipeline-version", default=None,
+                    help="tileparity version that runs the step (on the command line so that a new version runs the "
+                         "step again with -resume)")
 
 
 def _jsonable(obj):

@@ -215,7 +215,9 @@ def redundancy_captions(red: dict, args, source: str) -> dict:
                     "linear prediction: a view may be predictable in a non-linear way. The spatial blocks limit, but "
                     "do not remove, the help of spatial autocorrelation; the spatial null of every pair (the predicting "
                     "map moved over the tile grid, so that it keeps its structure but no longer describes the same "
-                    "tissue: r2_null_mean, r2_null_p95, p_null in redundancy.tsv) is the R2 reached by chance. No "
+                    "tissue; each null map a mosaic of a few moves covering (almost) every tile, fitted on the same "
+                    "tiles and folds as the real map: r2_null_mean, r2_null_p95, p_null in redundancy.tsv) is the R2 "
+                    "reached by chance. No "
                     "classical p-value is given: neighbouring tiles are not independent. What one view has and the "
                     "other lacks is not necessarily biology (noise, staining, focus): the maps show where it is. Every "
                     "pair: redundancy.tsv; every component: redundancy_pcs.tsv.gz."),
@@ -479,6 +481,9 @@ def run_redundancy(sample: dict, result: dict, args, prefix: str, parents, proce
     return red["info"]
 
 
+Q_TEXT = relevance.Q_EXPLAINED
+
+
 def relevance_captions(rel: dict, args, source: str) -> dict:
     info = rel["info"]
     block = f"{info['block']:g} {'um' if info['block_unit'] == 'um' else 'tiles'}"
@@ -488,64 +493,76 @@ def relevance_captions(rel: dict, args, source: str) -> dict:
     ginfo = info.get("genes") or {}
     n_null = ginfo.get("null_moves", 0)
     ceiling = (info.get("split_halves") or {}).get("r2_ceiling")
+    null_text = ("the spatial null: the view's map moved over the tile grid, so that it keeps its structure but no "
+                 "longer describes the same tissue; each null map is a mosaic of a few moves that covers (almost) every "
+                 "tile and is fitted on the same tiles and folds as the real map")
     main = {
         "what": (f"How much of the expression of the {info['n_tiles']} tiles of the set 'keep' each image view predicts. "
                  f"a: the expression's principal components (those of the clustering, at most {args.n_pcs}) predicted "
                  f"from each view's components, {model}; R2 = the share of the expression's variance that the view "
-                 "predicts; whiskers: 95 % interval (block bootstrap); black tick: 95th percentile of the spatial null "
-                 "(the view's map moved over the tile grid, so that it no longer describes the same tissue). In "
-                 "brackets: the share of the reachable (split halves: every molecule goes at random to half A or B; "
-                 "R2 of half B's components from the view / R2 of half B's components from half A"
-                 + (f", = {ceiling:.2f} here" if ceiling is not None and np.isfinite(ceiling) else "") + "). b: for "
-                 "pairs of views A and B, the R2 of A and B together split into what only A predicts (R2(A+B) - "
-                 "R2(B)), what only B predicts (R2(A+B) - R2(A)) and what both predict (the rest). c: R2 of each of "
-                 "the first five expression components on its own. " + views),
+                 f"predicts; whiskers: 95 % interval (block bootstrap); black tick: 95th percentile of {null_text}. In "
+                 "brackets: the share of the reachable. Every molecule of a tile goes at random to half A or half B (two "
+                 "independent samples of the same tissue); the ceiling is the share of half B's variance that the two "
+                 "halves share, i.e. that is not sampling noise"
+                 + (f" (= {ceiling:.2f} here)" if ceiling is not None and np.isfinite(ceiling) else "") + "; share of "
+                 "the reachable = R2 of half B from the view / ceiling. b: for pairs of views A and B, the expression's "
+                 "variance (0 to 1) split by a joint model (one regression on the components of both views): only A = "
+                 "R2(joint) - R2(B), shared (what both predict) = R2(A) + R2(B) - R2(joint), only B = R2(joint) - "
+                 "R2(A), and not explained = 1 - R2(joint); only A + shared + only B = R2(joint). c: R2 of each of the "
+                 "first five expression components on its own. " + views),
         "how": ("A bar well beyond its black tick: the view predicts expression better than an unrelated map with the "
                 "same structure would. A low R2 with a high share of the reachable: the expression itself is noisy "
-                "(few molecules per tile), not the image blind. In b, a long 'only A' part: A sees expression that B "
-                "misses. With LBP + INTENSITY_HE, 'only LBP' is what texture adds to the mere amount of stain. In c, "
-                "a view that predicts PC1 but not the later components sees only the main axis of the tissue."),
+                "(few molecules per tile), not the image blind; the share of the reachable does not depend on the depth. "
+                "In b, a long 'only A' part: A sees expression that B misses. With LBP + INTENSITY_HE, 'only LBP' is "
+                "what texture adds to the mere amount of stain. In c, a view that predicts PC1 but not the later "
+                "components sees only the main axis of the tissue."),
         "caveats": ("Linear prediction between principal components; R2 refers to the variance the expression's "
-                    "components keep. Out-of-sample R2 can be slightly negative, and so can a 'unique' part. The "
-                    "ceiling compares halves of the data, so it is a ceiling for half the depth. Neighbouring tiles "
-                    "are not independent, so no classical p-value is given. Every predictor: relevance.tsv; the "
-                    "split: relevance_partition.tsv."),
+                    "components keep. Out-of-sample R2 can be slightly negative, and so can a part in b. The ceiling is "
+                    "an estimate (it can be off by sampling error). Neighbouring tiles are not independent, so no "
+                    "classical p-value is given. Every predictor: relevance.tsv; the split: relevance_partition.tsv."),
         "source": source,
     }
     genes = {
         "what": (f"Gene by gene: each of the expression's most variable genes (counts per 10 000, log1p, z-scores, as in "
                  f"the clustering) predicted from the components of an image view ({model}; a penalty per gene chosen "
                  "by generalised cross-validation inside the training folds). a: every gene's R2 from two views "
-                 "(diagonal: equal R2), coloured by which views beat the per-gene spatial null (the view's map moved "
-                 f"{n_null} times over the tile grid and fitted exactly like the real map; empirical p = (1 + moves "
-                 "reaching the real R2) / (1 + moves), Benjamini-Hochberg q < 0.05 over the genes); labelled: the "
-                 "genes best predicted from the second view and those it adds most to the first. b: the genes best "
-                 "predicted from the second view, with the first view's R2 (black tick) and the gene's split-half "
-                 "reliability (the largest R2 its noise allows, roughly). " + views),
+                 "(diagonal: equal R2), coloured by which views beat the per-gene spatial null (" + null_text +
+                 f"; {n_null} null maps, each fitted exactly like the real map; p = (1 + null maps reaching the real R2) / "
+                 "(1 + null maps); q < 0.05). " + Q_TEXT + " Labelled: the genes best predicted from the second view and "
+                 "those it adds most to the first. b: the genes best predicted from the second view, with the first "
+                 "view's R2 (black tick) and the gene's reliability (split-half correlation stepped up to full depth: "
+                 "roughly the largest R2 its noise allows). " + views),
         "how": ("Purple: both views predict the gene beyond chance; orange: only LBP; blue: only UNI2-h; grey: neither. "
                 "Genes far above the diagonal are predicted from texture (LBP) better than from UNI2-h. Genes of "
                 "abundant, visually distinct cell types (stroma, muscle, epithelium) are expected among the best "
                 "predicted; a gene predicted from LBP beyond INTENSITY_HE (column adds_LBP_RGB_to_INTENSITY_HE) "
                 "relates to texture rather than to the amount of stain."),
-        "caveats": ("A gene predicted from the image is associated with what the tissue looks like there, not "
-                    "necessarily expressed by the cells that create the texture. With "
-                    f"{n_null} moves the smallest possible p is {1 / (1 + n_null) if n_null else float('nan'):.3g}, so "
-                    "with many genes only a gene that beats every move can reach q < 0.05; genes are correlated with "
-                    "each other. Confirm a gene on other slides. Every gene: relevance_genes.tsv.gz."),
+        "caveats": ("Beating the null means a real association, not a large one: with thousands of tiles, an R2 of a few "
+                    "thousandths can be significant (for example a gene whose measured value follows the number of "
+                    "cells, which the image sees). A gene predicted from the image is associated with what the tissue "
+                    "looks like there, not necessarily expressed by the cells that create the texture. With "
+                    f"{n_null} null maps the smallest possible p is {1 / (1 + n_null) if n_null else float('nan'):.3g}. "
+                    "Genes are correlated with each other. Confirm a gene on other slides. Every gene: "
+                    "relevance_genes.tsv.gz."),
         "source": source,
     }
     partition = {
-        "what": ("Gene by gene, the R2 of UNI2-h and LBP together split into three parts: only UNI2-h (R2(both) - "
-                 "R2(LBP)), both (R2(UNI2-h) + R2(LBP) - R2(both)) and only LBP (R2(both) - R2(UNI2-h)). a: the "
-                 "genes best predicted from both views together; black tick: the gene's split-half reliability (an "
-                 "estimate of the largest R2 its sampling noise allows). b: the parts summed over the genes that beat "
-                 "the spatial null from at least one view, as shares of their sum."),
+        "what": ("Gene by gene, each gene's variance (z-scores: 1 per gene) split by what UNI2-h and LBP predict: the "
+                 "joint model is one regression on the components of both views; only UNI2-h = R2(joint) - R2(LBP), "
+                 "shared (what both predict) = R2(UNI2-h) + R2(LBP) - R2(joint), only LBP = R2(joint) - R2(UNI2-h), "
+                 "and not explained = 1 - R2(joint) (light grey); only UNI2-h + shared + only LBP = R2(joint). a: the "
+                 "genes best predicted by the joint model; black tick: the gene's reliability (split-half correlation "
+                 "stepped up to full depth, an estimate of the largest R2 its sampling noise allows). b: the parts "
+                 "averaged over all genes and over the well-measured genes (reliability >= 0.5); black tick: their "
+                 "mean reliability."),
         "how": ("A gene with a long 'only UNI2-h' part is predicted by what UNI2-h sees beyond LBP texture; a long "
-                "'both' part: the gene follows texture that UNI2-h also encodes; 'only LBP': texture UNI2-h does not "
-                "represent linearly. A bar far below its tick: the image misses much of what could be predicted."),
+                "'shared' part: the gene follows texture that UNI2-h also encodes; 'only LBP': texture UNI2-h does not "
+                "represent linearly. Between the end of the coloured parts and the tick: expression the image misses "
+                "although the molecules would allow it; beyond the tick: sampling noise."),
         "caveats": ("Linear models on principal components: 'only UNI2-h' is what UNI2-h predicts beyond the LBP "
                     "histograms, not beyond texture in general. Out-of-sample R2 is noisy, so small parts (and "
-                    "negative ones, drawn as 0) mean little. No test of the parts themselves. Every gene: "
+                    "negative ones, drawn as 0) mean little. The reliability assumes the full depth is the sum of the "
+                    "halves, an approximation on the log scale. No test of the parts themselves. Every gene: "
                     "relevance_gene_partition.tsv.gz."),
         "source": source,
     }
@@ -671,7 +688,10 @@ def texture_captions(args, source: str, n_genes: int, channels: str) -> dict:
                  "fraction of the tile's pixels of one LBP type at one radius: spot bright (code 0: every neighbour "
                  "darker), spot dark or flat (code P: no neighbour darker), edge (codes 1 .. P - 1: the brighter "
                  "neighbours form one arc), irregular (code P + 1). a: the genes most associated with texture "
-                 "(largest |rho| among q < 0.05) against the 52 features; b: per feature, how many genes reach q < 0.05."),
+                 "(largest |rho| among q < 0.05) against the 52 features; colour: rho, saturated at the 98th "
+                 "percentile of |rho| among the genes shown (written under the panel), so that small differences show; "
+                 "rho itself ranges from -1 to 1; dot: q < 0.05. b: per feature, how many genes reach q < 0.05. "
+                 + Q_TEXT),
         "how": ("Red: more of this texture where the gene is high; blue: less. A column with many dots is a texture "
                 "that follows the expression; a row, a gene that follows texture. In b, the radius where a type peaks "
                 "is the scale (in pixels; x 0.5 um at 0.5 um per px) of the structure that goes with the genes, e.g. "

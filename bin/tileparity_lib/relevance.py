@@ -10,34 +10,47 @@ spatial null), on the set ``keep`` of one slide:
   predicted from the principal components of every image view. R^2 = the share of the
   expression's variance (as far as its components keep it) that the view predicts; also
   per component for the first five (``r2_pc1`` .. ``r2_pc5``).
-* Noise ceiling (split halves, as in the patch sweep): every molecule of a tile goes at
-  random to half A or half B (binomial thinning with p = 0.5), each half is prepared like
-  the expression (its own most variable genes, z-scores, principal components), and the
-  components of half B are predicted from the view (``r2_half``) and from half A
-  (``r2_ceiling``: what a predictor that knows the tile's biology but not its sampling
-  noise reaches). ``fraction`` = r2_half / r2_ceiling, the share of the reachable that the
-  view reaches.
+* Spatial null (view level): the view's map moved over the tile grid, as in the redundancy.
+  Every null realization is a mosaic of a few moves that gives (almost) every tile a partner,
+  so that the moved map is fitted on the same tiles and folds as the real one (a fit on fewer
+  tiles has a lower R^2 even by chance); ``p_null`` = (1 + realizations with R^2 >= the real
+  one) / (1 + realizations).
+* Noise ceiling (split halves): every molecule of a tile goes at random to half A or half B
+  (binomial thinning, p = 0.5); given the tile's biology the two halves are independent
+  samples of it. Half B is prepared like the expression (its most variable genes, z-scores,
+  principal components) and half A on the same genes; half A is projected on half B's
+  component axes. Over the tiles, cov(A, B) along an axis is the variance both halves share
+  (the biology) and var(B) the total, so ``r2_ceiling`` = sum cov / sum var over the
+  components is the share of half B's variance that is not sampling noise: the largest R^2
+  any predictor that does not see half B's own molecules can reach (estimate; it can be off
+  by sampling error). ``r2_half`` is the R^2 of half B's components from the view and
+  ``fraction`` = r2_half / r2_ceiling the share of the reachable that the view reaches. Under
+  this model it does not depend on the depth (more noise lowers both alike).
 * What each view adds (variance partitioning, for pairs of views A, B): R^2 from A, from B
-  and from A and B together (their components side by side). Then
-  unique to A = R^2(A+B) - R^2(B), unique to B = R^2(A+B) - R^2(A),
-  shared = R^2(A) + R^2(B) - R^2(A+B).
+  and from the joint model (A's and B's components side by side, one regression). Then
+  only A = R^2(joint) - R^2(B), only B = R^2(joint) - R^2(A),
+  shared = R^2(A) + R^2(B) - R^2(joint) (what both predict: the overlap),
+  not explained = 1 - R^2(joint); only A + shared + only B = R^2(joint).
   The default pairs are UNI2-h and LBP on the same pixels (what texture adds to the
   foundation model and the reverse) and LBP with INTENSITY_HE (what texture adds to the
   mere amount of stain).
 * Gene by gene: every one of the expression's most variable genes (counts per 10 000,
   log1p, z-scores, as in the clustering) predicted from each of a few image views, with a
   ridge penalty per gene chosen by generalised cross-validation inside the training folds
-  (Golub, Heath & Wahba 1979). Spatial null per gene: the view's map moved over the tile
-  grid (``gene_null_shifts`` moves), every move fitted with exactly the same rule as the
-  real fit. Empirical one-sided p = (1 + moves with null R^2 >= real R^2) / (1 + moves),
-  so the smallest possible p is 1 / (1 + moves); Benjamini-Hochberg q-values over the
-  genes. z = (R^2 - null mean) / null sd is kept to rank genes, not to test them.
-* Per gene, split-half reliability: the correlation over tiles of the gene in half A and
-  half B (log1p counts per 10 000), stepped up to full depth with the Spearman-Brown
-  formula 2 r / (1 + r). Roughly the largest R^2 any predictor could reach for the gene
-  (the rest is sampling noise).
-* Per gene, partition for the pairs (UNI2H_RGB, LBP_RGB) and (INTENSITY_HE, LBP_RGB): R^2
-  from each view and from both, and shared / only A / only B as above (``gene_partition``).
+  (Golub, Heath & Wahba 1979). Spatial null per gene: ``gene_null_shifts`` realizations of
+  the moved view as above, each fitted with exactly the rule of the real fit on the same
+  tiles and folds; p = (1 + realizations with R^2 >= the gene's real R^2) / (1 +
+  realizations), so the smallest possible p is 1 / (1 + realizations); Benjamini-Hochberg
+  q-values over the genes. In simulations (irregular tissue, 50 smooth predictors, white or
+  smooth noise genes) this keeps its level (2-4 % below 0.05) at every overlap, where moves
+  of a single shift exceeded it when they kept few tiles (up to 10 % at 34 % overlap).
+* Per gene, split-half correlation r (log1p counts per 10 000 of half A and half B over the
+  tiles): the share of the gene's variance at half depth that is signal; stepped up to full
+  depth with the Spearman-Brown formula, ``reliability`` = 2 r / (1 + r): roughly the
+  largest R^2 any predictor could reach for the gene (the formula assumes the full depth is
+  the sum of the halves; on the log scale this is an approximation).
+* Per gene, partition for the pairs (UNI2H_RGB, LBP_RGB) and (INTENSITY_HE, LBP_RGB), as
+  above (``gene_partition``).
 
 R^2 is out-of-sample, so it can be negative when a view predicts nothing. Genes are not
 independent of each other: use the q-values to rank genes, and confirm a gene on other
@@ -56,9 +69,15 @@ TABLE_COLUMNS = (["set", "predictor", "kind", "n_tiles", "n_folds", "n_pcs_predi
                   "expression_pc_variance", "r2"] + [f"r2_pc{i}" for i in range(1, N_PC_COLUMNS + 1)] +
                  ["r2_ci_low", "r2_ci_high", "r2_fold_sd", "null_moves", "r2_null_mean", "r2_null_p95", "p_null",
                   "r2_half", "r2_ceiling", "fraction"])
-PARTITION_COLUMNS = ["set", "view_a", "view_b", "r2_a", "r2_b", "r2_ab", "unique_a", "unique_b", "shared"]
-GENE_PARTITION_COLUMNS = ["gene_id", "gene_name", "view_a", "view_b", "r2_a", "r2_b", "r2_ab", "only_a", "only_b",
-                          "shared", "q_a", "q_b", "reliability"]
+PARTITION_COLUMNS = ["set", "view_a", "view_b", "r2_a", "r2_b", "r2_joint", "only_a", "only_b", "shared", "not_explained"]
+GENE_PARTITION_COLUMNS = ["gene_id", "gene_name", "view_a", "view_b", "r2_a", "r2_b", "r2_joint", "only_a", "only_b",
+                          "shared", "not_explained", "q_a", "q_b", "split_half_r", "reliability"]
+Q_EXPLAINED = ("q is the Benjamini-Hochberg adjusted p-value: with thousands of tests, some p-values are small by "
+               "chance alone; if every result with q < 0.05 is kept, at most about 5 % of them are expected to be false "
+               "(a property of the set, not of each result). It is computed by ranking the p-values from smallest to "
+               "largest and multiplying the p-value at rank i of m by m / i (then never letting q decrease down the "
+               "list).")
+WELL_MEASURED = 0.5  # reliability above which a gene counts as well measured (at least half of it is signal)
 DEFAULT_PAIRS = (("UNI2H_RGB", "LBP_RGB"), ("UNI2H_RGB_HE", "LBP_RGB_HE"), ("INTENSITY_HE", "LBP_RGB"),
                  ("UNI2H_RGB", "INTENSITY_HE"))
 DEFAULT_GENE_VIEWS = ("UNI2H_RGB", "LBP_RGB", "INTENSITY_HE")
@@ -101,6 +120,44 @@ def split_halves(Y_tiles_x_genes, seed: int):
     A.eliminate_zeros()
     B.eliminate_zeros()
     return A, B
+
+
+def zscore_genes(Y_tiles_x_genes, idx) -> np.ndarray:
+    """z-scores (clipped at 10) of the genes ``idx`` prepared as for the clustering (counts per
+    10 000 of all genes, log1p)."""
+    from .cluster import zscore
+
+    return zscore(normalise(Y_tiles_x_genes)[:, idx].toarray(), clip=10.0)
+
+
+def split_half_components(ZA: np.ndarray, ZB: np.ndarray, n_components: int, seed: int) -> tuple[np.ndarray, ...]:
+    """Half B's principal components and how much of each is signal.
+
+    ``ZA``, ``ZB``: tiles x the same genes, each half prepared alike. PCA of half B gives its
+    components EB (tiles x c) and their axes; half A is projected on the same axes. Half A's
+    sampling noise is independent of half B's (and of the axes, which come from half B), so
+    over the tiles cov(A_c, B_c) estimates the variance of component c that both halves share
+    and var(B_c) its total variance. Returns (EB, shared variance per component, total
+    variance per component); ceiling = shared.sum() / total.sum()."""
+    from sklearn.decomposition import PCA
+
+    ZA, ZB = np.asarray(ZA, float), np.asarray(ZB, float)
+    ok = ZB.std(axis=0) > 0
+    ZA, ZB = ZA[:, ok], ZB[:, ok]
+    k = int(min(n_components, ZB.shape[0] - 1, ZB.shape[1]))
+    if k < 1:
+        return np.zeros((ZB.shape[0], 0)), np.zeros(0), np.zeros(0)
+    model = PCA(n_components=k, random_state=seed).fit(ZB)
+    EB = model.transform(ZB)
+    EB -= EB.mean(axis=0)
+    PA = (ZA - ZA.mean(axis=0)) @ model.components_.T
+    return EB, (PA * EB).mean(axis=0), (EB**2).mean(axis=0)
+
+
+def ceiling_of(shared: np.ndarray, total: np.ndarray) -> float:
+    """Share of the total variance that both halves share (NaN when there is none)."""
+    t = float(np.sum(total))
+    return float(np.sum(shared)) / t if t > 0 else float("nan")
 
 
 def gene_reliability(A, B, idx) -> tuple[np.ndarray, np.ndarray]:
@@ -168,15 +225,18 @@ def _r2_columns(Y: np.ndarray, pred: np.ndarray) -> np.ndarray:
     return R.r2_scores(Y, pred)[1]
 
 
-def gene_null(X: np.ndarray, G: np.ndarray, folds: np.ndarray, moves) -> np.ndarray:
-    """moves x genes null R^2: the view's map moved over the grid (tile j under tile i),
-    fitted exactly like the real fit."""
+def gene_null(X: np.ndarray, G: np.ndarray, folds: np.ndarray, partners) -> np.ndarray:
+    """realizations x genes null R^2: the genes of the tiles with a partner predicted from the
+    view's tiles laid under them (``partners``: one array per realization, see
+    :func:`tileparity_lib.cluster.patched_partners`), same folds and exactly the rule of the
+    real fit."""
     out = []
-    for i, j in moves:
-        f = folds[i]
+    for partner in partners:
+        ok = np.flatnonzero(partner >= 0)
+        f = folds[ok]
         if len(np.unique(f)) < 2:
             continue
-        out.append(_r2_columns(G[i], ridge_gcv_predict(X[j], G[i], f)))
+        out.append(_r2_columns(G[ok], ridge_gcv_predict(X[partner[ok]], G[ok], f)))
     return np.vstack(out) if out else np.empty((0, G.shape[1]))
 
 
@@ -214,30 +274,23 @@ def run(scores: dict, variance: dict, tiles: pd.DataFrame, views: list[str], set
         return {"info": info}
     info["n_folds"] = int(folds.max()) + 1
     blocks = R.spatial_blocks(x, y, block)
-    moves = []
-    if (null_shifts > 0 or gene_null_shifts > 0) and "row" in tiles and (tiles["row"].astype(int) >= 0).all():
-        from .cluster import torus_pairs
-
-        moves = torus_pairs(tiles["row"], tiles["col"], max(null_shifts, gene_null_shifts), seed)
-    info["null"] = {"moves": len(moves)} if moves else {"moves": 0, "note": "not computed: tiles not on a grid"}
+    partners, info["null"] = R.null_partners(tiles, max(null_shifts, gene_null_shifts), seed)
     E = scores["EXPRESSION"]
 
     # split halves for the noise ceiling
     EB, ceiling, halves = None, np.nan, None
     if counts is not None and counts.shape[0] == len(tiles):
-        from .cluster import pca
-
         halves = split_halves(counts, seed)
-        ZA, _ = expression_genes(halves[0].T, n_hvg)
-        ZB, _ = expression_genes(halves[1].T, n_hvg)
-        EA, EB = pca(ZA, E.shape[1], seed)[0], pca(ZB, E.shape[1], seed)[0]
-        if EA.shape[1] and EB.shape[1]:
-            pa, _ = R.cross_predict(EA, EB, folds)
-            ceiling = R.r2_scores(EB, pa)[0]
-        else:
+        ZB, idx_b = expression_genes(halves[1].T, n_hvg)
+        ZA = zscore_genes(halves[0], idx_b)
+        EB, shared_c, total_c = split_half_components(ZA, ZB, E.shape[1], seed)
+        ceiling = ceiling_of(shared_c, total_c)
+        if EB.shape[1] == 0:
             EB = None
-        info["split_halves"] = {"r2_ceiling": float(ceiling), "seed": int(seed),
-                                "molecules_median_half": float(np.median(np.asarray(halves[0].sum(axis=1)).ravel()))}
+        info["split_halves"] = {
+            "r2_ceiling": float(ceiling), "seed": int(seed), "n_components": int(len(total_c)),
+            "ceiling_pc1_5": [float(x) for x in (shared_c[:5] / np.where(total_c[:5] > 0, total_c[:5], np.nan))],
+            "molecules_median_half": float(np.median(np.asarray(halves[1].sum(axis=1)).ravel()))}
 
     def fit(X):
         pred, _ = R.cross_predict(X, E, folds)
@@ -252,7 +305,7 @@ def run(scores: dict, variance: dict, tiles: pd.DataFrame, views: list[str], set
         r2_of[name] = total
         fr = R.fold_r2(E, pred, folds)
         boot = R.block_bootstrap_r2(E, pred, blocks, n_boot, seed)
-        null = (R.null_r2(X, E, folds, moves[:null_shifts]) if (moves and kind == "view" and null_shifts > 0)
+        null = (R.null_r2(X, E, folds, partners[:null_shifts]) if (partners and kind == "view" and null_shifts > 0)
                 else np.array([], float))
         row = {"set": set_name, "predictor": name, "kind": kind, "n_tiles": int(len(tiles)),
                "n_folds": info["n_folds"], "n_pcs_predictor": int(X.shape[1]), "n_pcs_expression": int(E.shape[1]),
@@ -276,8 +329,8 @@ def run(scores: dict, variance: dict, tiles: pd.DataFrame, views: list[str], set
     part = []
     for a, b in joint_pairs:
         ra, rb, rab = r2_of[a], r2_of[b], r2_of[f"{a}{JOINT}{b}"]
-        part.append({"set": set_name, "view_a": a, "view_b": b, "r2_a": ra, "r2_b": rb, "r2_ab": rab,
-                     "unique_a": rab - rb, "unique_b": rab - ra, "shared": ra + rb - rab})
+        part.append({"set": set_name, "view_a": a, "view_b": b, "r2_a": ra, "r2_b": rb, "r2_joint": rab,
+                     "only_a": rab - rb, "only_b": rab - ra, "shared": ra + rb - rab, "not_explained": 1 - rab})
     out = {"table": pd.DataFrame(rows, columns=TABLE_COLUMNS), "partition": pd.DataFrame(part, columns=PARTITION_COLUMNS),
            "info": info}
 
@@ -291,8 +344,8 @@ def run(scores: dict, variance: dict, tiles: pd.DataFrame, views: list[str], set
         for v in gviews:
             r2 = _r2_columns(G, ridge_gcv_predict(scores[v], G, folds))
             gtab[f"r2_{v}"] = r2
-            if moves and gene_null_shifts > 0:
-                N = gene_null(scores[v], G, folds, moves[:gene_null_shifts])
+            if partners and gene_null_shifts > 0:
+                N = gene_null(scores[v], G, folds, partners[:gene_null_shifts])
                 n_null = max(n_null, len(N))
                 if len(N) >= 2:
                     mu, sd = N.mean(axis=0), N.std(axis=0, ddof=1)
@@ -313,14 +366,16 @@ def run(scores: dict, variance: dict, tiles: pd.DataFrame, views: list[str], set
                 ra, rb = gtab[f"r2_{a}"].to_numpy(float), gtab[f"r2_{b}"].to_numpy(float)
                 gparts.append(pd.DataFrame({
                     "gene_id": gtab["gene_id"], "gene_name": gtab["gene_name"], "view_a": a, "view_b": b,
-                    "r2_a": ra, "r2_b": rb, "r2_ab": rab, "only_a": rab - rb, "only_b": rab - ra, "shared": ra + rb - rab,
+                    "r2_a": ra, "r2_b": rb, "r2_joint": rab, "only_a": rab - rb, "only_b": rab - ra,
+                    "shared": ra + rb - rab, "not_explained": 1 - rab,
                     "q_a": gtab.get(f"q_{a}", np.nan), "q_b": gtab.get(f"q_{b}", np.nan),
-                    "reliability": gtab.get("reliability", np.nan)}))
+                    "split_half_r": gtab.get("split_half_r", np.nan), "reliability": gtab.get("reliability", np.nan)}))
         out["genes"] = gtab
         out["gene_partition"] = (pd.concat(gparts, ignore_index=True)[GENE_PARTITION_COLUMNS] if gparts
                                  else pd.DataFrame(columns=GENE_PARTITION_COLUMNS))
         info["genes"] = {"n": int(G.shape[1]), "views": gviews, "null_moves": int(n_null),
                          "smallest_p": (1.0 / (1 + n_null)) if n_null else None,
+                         "null": "moved view as a mosaic of moves covering (almost) every tile",
                          "penalty": "one per gene, generalised cross-validation inside the training folds"}
     info["status"] = "computed"
     return out

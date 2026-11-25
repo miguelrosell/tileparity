@@ -204,6 +204,8 @@ def validatePatchSweep() {
     }
     wholeParam('patch_sweep_cell_um', params.patch_sweep_cell_um, 2)
     wholeParam('patch_sweep_max_radius', params.patch_sweep_max_radius, 1)
+    wholeParam('patch_sweep_genes', params.patch_sweep_genes, 0)
+    wholeParam('patch_sweep_gene_size_um', params.patch_sweep_gene_size_um, 2)
     if (!(params.patch_sweep_channels.toString() in ['rgb', 'rgb_he', 'he', 'h', 'e'])) {
         error("--patch_sweep_channels must be one input set: rgb, rgb_he, he, h or e")
     }
@@ -374,7 +376,7 @@ def summaryText(int nSamples, List scales) {
     texture     : ${params.texture_genes ? "52 features of ${params.texture_genes_view} (${params.texture_genes_channel}) x ${params.texture_genes_n} genes" : 'off (--texture_genes)'}
     depth       : ${params.expression_thin_to.toString() in ['0', '0.0'] ? 'counts as measured' : "counts thinned to a median of ${params.expression_thin_to} molecules per tile"}
     cohort      : ${params.cluster && params.cohort_summary ? "summary per scale, groups '${params.cohort_group}', unit '${params.cohort_pair}'" : 'off'}${params.cluster && params.cluster_gallery ? '; tile galleries' : ''}
-    patch sweep : ${params.patch_sweep ? "LBP (${params.patch_sweep_channels}, radii <= ${params.patch_sweep_max_radius} px) on patches of ${params.patch_sweep_sizes_um} um, Visium HD slides" : 'off (--patch_sweep)'}
+    patch sweep : ${params.patch_sweep ? "LBP (${params.patch_sweep_channels}, radii <= ${params.patch_sweep_max_radius} px) on patches of ${params.patch_sweep_sizes_um} um, Visium HD slides; ${params.patch_sweep_genes} genes one by one" : 'off (--patch_sweep)'}
     gpu         : ${params.use_gpu}
     outdir      : ${params.outdir}
     --------------------------------------------------

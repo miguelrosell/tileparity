@@ -107,7 +107,7 @@ def long_table(slides: list[dict]) -> pd.DataFrame:
                                            "value": rel[metric]}))
         p = sl.get("partition")
         if p is not None and len(p):
-            for metric in ("unique_a", "unique_b", "shared"):
+            for metric in [m for m in ("r2_joint", "only_a", "only_b", "shared", "not_explained") if m in p]:
                 parts.append(pd.DataFrame({"sample": s, "analysis": "relevance_partition", "set": p["set"],
                                            "method": "", "k": np.nan, "a": p["view_a"], "b": p["view_b"],
                                            "metric": metric, "value": p[metric]}))
@@ -209,26 +209,32 @@ def gene_table(slides: list[dict], level: float = 0.05) -> pd.DataFrame:
     return agg.reset_index().sort_values(agg.columns[0] if len(agg.columns) else "gene_id", ascending=False)
 
 
-def gene_partition_table(slides: list[dict], level: float = 0.05) -> pd.DataFrame:
-    """Per slide and pair of views: the parts of R2(A+B) (only A, both, only B; below 0
-    counted as 0) summed over the genes that beat the spatial null from at least one view,
-    and their shares."""
+def gene_partition_table(slides: list[dict]) -> pd.DataFrame:
+    """Per slide and pair of views: the mean over the genes of every part of the gene's
+    variance (only A, shared, only B, joint, not explained) and of the reliability, for all
+    genes and for the well-measured ones (reliability >= relevance.WELL_MEASURED)."""
+    from .relevance import WELL_MEASURED
+
     rows = []
     for s in slides:
         gp = s.get("gene_partition")
-        if gp is None or gp.empty:
+        if gp is None or gp.empty or "r2_joint" not in gp:
             continue
         for (a, b), t in gp.groupby(["view_a", "view_b"], sort=False):
-            sig = (t["q_a"] < level) | (t["q_b"] < level)
-            row = {"sample": sample_name(s), "view_a": a, "view_b": b, "n_genes": len(t), "n_genes_sig": int(sig.sum())}
-            for suffix, u in (("", t[sig]), ("_all_genes", t)):
-                pos = u[["only_a", "shared", "only_b"]].clip(lower=0).sum()
-                tot = float(pos.sum())
-                for part in ("only_a", "shared", "only_b"):
-                    row[f"sum_{part}{suffix}"] = pos[part]
-                    row[f"share_{part}{suffix}"] = pos[part] / tot if tot > 0 else np.nan
-            rows.append(row)
+            for group, u in (("all", t), ("well_measured", t[t["reliability"] >= WELL_MEASURED] if "reliability" in t
+                                          else t.iloc[0:0])):
+                row = {"sample": sample_name(s), "view_a": a, "view_b": b, "genes": group, "n_genes": len(u)}
+                for c in ("only_a", "shared", "only_b", "r2_joint", "not_explained", "reliability"):
+                    row[f"mean_{c}"] = float(u[c].mean()) if c in u and len(u) else np.nan
+                rows.append(row)
     return pd.DataFrame(rows)
+
+
+def partition_table(slides: list[dict]) -> pd.DataFrame:
+    """Per slide and pair of views, the partition of the expression's components (relevance)."""
+    parts = [s["partition"].assign(sample=sample_name(s)) for s in slides
+             if s.get("partition") is not None and len(s["partition"]) and "r2_joint" in s["partition"]]
+    return pd.concat(parts, ignore_index=True) if parts else pd.DataFrame()
 
 
 def domains_table(slides: list[dict], n_markers: int = 10) -> pd.DataFrame:

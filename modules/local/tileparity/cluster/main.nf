@@ -40,6 +40,7 @@ process TILEPARITY_CLUSTER {
         --input-dir . \\
         --prefix ${prefix} \\
         --process ${task.process} \\
+        --pipeline-version ${workflow.manifest.version} \\
         ${args}
 
     tp_versions.py "${task.process}" scikit-learn igraph umap-learn > versions.yml

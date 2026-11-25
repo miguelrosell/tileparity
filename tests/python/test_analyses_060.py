@@ -114,8 +114,9 @@ def test_relevance_partitions_the_expression_between_two_views():
                         genes=(G, np.array(["g1", "g2", "g3"]), np.array(["G1", "G2", "G3"])),
                         block_um=500, null_shifts=5, n_boot=20, gene_null_shifts=5)
     part = out["partition"].set_index(["view_a", "view_b"]).loc[("UNI2H_RGB", "LBP_RGB")]
-    assert part["unique_a"] > 0.3 and part["unique_b"] > 0.3 and abs(part["shared"]) < 0.1
-    assert part["unique_a"] + part["unique_b"] + part["shared"] == pytest.approx(part["r2_ab"])
+    assert part["only_a"] > 0.3 and part["only_b"] > 0.3 and abs(part["shared"]) < 0.1
+    assert part["only_a"] + part["only_b"] + part["shared"] == pytest.approx(part["r2_joint"])
+    assert part["not_explained"] == pytest.approx(1 - part["r2_joint"])
     g = out["genes"].set_index("gene_id")
     assert g.loc["g1", "r2_UNI2H_RGB"] > 0.9 and g.loc["g2", "r2_LBP_RGB"] > 0.9 and g.loc["g3", "r2_LBP_RGB"] < 0.1
     assert g.loc["g2", "adds_LBP_RGB_to_UNI2H_RGB"] > 0.8

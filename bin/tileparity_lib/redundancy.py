@@ -38,9 +38,12 @@ independent observations):
 * Spatial null: A's map is moved over B's on the tile grid with wrap-around (the moves of
   the clustering's null, :func:`tileparity_lib.cluster.torus_pairs`), so that A keeps its
   spatial structure but no longer describes the same tissue as B, and B is predicted again
-  from the moved A with the same cross-validation. The R^2 of the moved maps is the level
-  reached by chance; ``p_null`` = (1 + moves with R^2 >= the real one) / (1 + moves). Only
-  for tiles on the grid.
+  from the moved A with the same cross-validation. A single move keeps only the tiles whose
+  partner lies in the tissue, and an out-of-sample R^2 fitted on fewer tiles is lower even
+  by chance; so every null realization is a mosaic of a few moves that gives (almost) every
+  tile a partner (:func:`tileparity_lib.cluster.patched_partners`) and is fitted on the same
+  tiles and folds as the real map. ``p_null`` = (1 + realizations with R^2 >= the real one)
+  / (1 + realizations). Only for tiles on the grid.
 """
 
 from __future__ import annotations
@@ -152,17 +155,38 @@ def block_bootstrap_r2(Y: np.ndarray, pred: np.ndarray, blocks: np.ndarray, n_bo
     return np.where(T > 0, 1 - res_b[draws].sum(axis=1) / np.where(T > 0, T, 1), np.nan)
 
 
-def null_r2(X: np.ndarray, Y: np.ndarray, folds: np.ndarray, moves, alphas=ALPHAS) -> np.ndarray:
-    """R^2 of Y predicted from X moved over the tile grid: for every move (i, j), tile i of Y
-    is paired with tile j of X; same folds as the real prediction (those of the Y tiles)."""
+def null_r2(X: np.ndarray, Y: np.ndarray, folds: np.ndarray, partners, alphas=ALPHAS) -> np.ndarray:
+    """R^2 of Y predicted from X moved over the tile grid, one value per null realization:
+    ``partners`` holds, per realization, the tile of X laid under every tile of Y (-1: none;
+    see :func:`tileparity_lib.cluster.patched_partners`); same folds as the real prediction.
+    Realizations whose tiles fall in fewer than 2 folds are skipped."""
     out = []
-    for i, j in moves:
-        f = folds[i]
+    for partner in partners:
+        ok = np.flatnonzero(partner >= 0)
+        f = folds[ok]
         if len(np.unique(f)) < 2:
             continue
-        pred, _ = cross_predict(X[j], Y[i], f, alphas)
-        out.append(r2_scores(Y[i], pred)[0])
+        pred, _ = cross_predict(X[partner[ok]], Y[ok], f, alphas)
+        out.append(r2_scores(Y[ok], pred)[0])
     return np.array(out, float)
+
+
+def null_partners(tiles: pd.DataFrame, n: int, seed: int) -> tuple[list[np.ndarray], dict]:
+    """The null realizations of a tile set (patched moves) and what they are."""
+    if n <= 0 or "row" not in tiles or not (tiles["row"].astype(int) >= 0).all():
+        return [], {"moves": 0, "note": "not computed: tiles not on a grid"}
+    from .cluster import patched_partners, torus_pairs
+
+    moves = torus_pairs(tiles["row"], tiles["col"], n, seed)
+    if not moves:
+        return [], {"moves": 0, "note": "not computed: no possible move"}
+    partners = patched_partners(moves, len(tiles), seed)
+    cover = [float((p >= 0).mean()) for p in partners]
+    overlap = [len(i) / len(tiles) for i, _ in moves]
+    return partners, {"moves": len(moves), "min_shift": 0.2, "min_overlap": 0.3,
+                      "overlap_median": float(np.median(overlap)), "coverage_median": float(np.median(cover)),
+                      "coverage_min": float(np.min(cover)),
+                      "realization": "mosaic of up to 10 moves covering (almost) every tile"}
 
 
 def unexplained_per_tile(Y: np.ndarray, pred: np.ndarray) -> np.ndarray:
@@ -209,13 +233,7 @@ def run(scores: dict, variance: dict, tiles: pd.DataFrame, views: list[str], set
     info["n_folds"] = int(folds.max()) + 1
     info["fold_sizes"] = np.bincount(folds).tolist()
     blocks = spatial_blocks(x, y, block)
-    moves = []
-    if null_shifts > 0 and "row" in tiles and (tiles["row"].astype(int) >= 0).all():
-        from .cluster import torus_pairs
-
-        moves = torus_pairs(tiles["row"], tiles["col"], null_shifts, seed)
-    info["null"] = ({"moves": len(moves), "min_shift": 0.2, "min_overlap": 0.3} if moves else
-                    {"moves": 0, "note": "not computed: tiles not on a grid, or no possible move"})
+    partners, info["null"] = null_partners(tiles, null_shifts, seed)
     info["bootstrap"] = {"resamples": int(n_boot), "unit": "spatial block", "n_blocks": int(blocks.max()) + 1}
     pairs = [(a, b) for a in views for b in views if a != b]
     drawn = set(map_pairs if map_pairs is not None else default_map_pairs(views))
@@ -229,7 +247,7 @@ def run(scores: dict, variance: dict, tiles: pd.DataFrame, views: list[str], set
         r2_top5 = float(np.nansum(per[top5] * share[top5]) / np.nansum(share[top5])) if per.size else float("nan")
         fr = fold_r2(scores[b], pred, folds)
         boot = block_bootstrap_r2(scores[b], pred, blocks, n_boot, seed)
-        null = null_r2(scores[a], scores[b], folds, moves) if moves else np.array([], float)
+        null = null_r2(scores[a], scores[b], folds, partners) if partners else np.array([], float)
         rows.append({"set": set_name, "predictor": a, "target": b, "n_tiles": int(len(tiles)),
                      "n_folds": info["n_folds"], "block_um": float(block_um) if unit == "um" else float("nan"),
                      "n_pcs_predictor": int(scores[a].shape[1]), "n_pcs_target": int(scores[b].shape[1]),

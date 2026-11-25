@@ -606,6 +606,43 @@ ls -lh tp_v070_crc.tgz
 
 From a terminal on the laptop: `scp <user>@wimbledon.mls.uzh.ch:tileparity/runs/four_samples/tp_v070_crc.tgz ~/`.
 
+## 16. Colorectal cancer with tileparity 0.7.1: the fixes and the patch sweep gene by gene
+
+The same folder and the same two runs as section 15, with 0.7.1: the noise ceiling and the spatial null of R² corrected, the partition figures redrawn, and the patch sweep followed gene by gene. Since 0.7.1 the clustering step, the patch sweep and the cohort summary carry the pipeline version on their command line, so `-resume` runs them again (and the steps that use their outputs: galleries, exports) while everything before them stays cached.
+
+```bash
+source $HOME/tileparity/env.sh
+git -C $TP/tileparity pull
+git -C $TP/tileparity log -1 --oneline          # "tileparity 0.7.1: ..." or later
+cd $TP/runs/four_samples
+sed -e 's/tp_crc070/tp_crc071/' -e 's/results_v070/results_v071/g' run_v070.sbatch > run_v071.sbatch
+grep -n "results_v071\|tp_crc071" run_v071.sbatch  # three lines: the job name and the two outdirs
+sbatch run_v071.sbatch
+squeue -u $USER                                  # ONE job; submit only once (Ctrl+C on tail does not stop it)
+tail -n 15 tp_crc071_<job number>.log            # look now and then; the job ends when squeue shows nothing
+sacct -j <job number> --format=JobID,State,Elapsed,MaxRSS
+```
+
+In the log, `TILEPARITY_PREPARE`, `UNI2H_EMBED`, `FASTLBP_EXTRACT` and `TILEPARITY_AGGREGATEST` say `cached`; `TILEPARITY_CLUSTER` (4 slides), `TILEPARITY_PATCH_SWEEP` (3 Visium HD slides; the slowest step) and the cohort run again. Probably one to three hours in all.
+
+**What to look at** (`results_v071/cohort/mpp0.5000/` and the slides' `cluster/` and `patch_sweep/` folders):
+
+1. `relevance.png`: the share of the reachable with the corrected ceiling. Check: the same view should have about the same share in `results_v071` and in `results_v071_thin1000` (the share no longer depends on the depth; in 0.7.0 it rose above 1 when thinned).
+2. `partition.png` (new) and `gene_partition.png`: bars from 0 to 1 with only UNI2-h, shared, only LBP and what neither predicts.
+3. `patch_sweep.png`: a, the expression's components with the corrected ceiling (expect a steeper rise with size than in 0.7.0); b, the genes one by one. Then each slide's `patch_sweep.png`, panel d, and the cohort's `patch_sweep_genes.tsv`: genes predicted relatively better with small patches on 3 of 3 slides, if any.
+4. `texture_genes.png`: columns now ordered by type and radius.
+
+**Package and send** (on wimbledon, then from the laptop):
+
+```bash
+cd $TP/runs/four_samples
+tar czf tp_v071_crc.tgz --exclude='*.h5' --exclude='*.h5ad' --exclude='*.rds' --exclude='*.tif' \
+    results_v071 results_v071_thin1000 tp_crc071_*.log run_v071.sbatch samplesheet.csv
+ls -lh tp_v071_crc.tgz
+```
+
+From a terminal on the laptop: `scp miguel@wimbledon.mls.uzh.ch:tileparity/runs/four_samples/tp_v071_crc.tgz ~/`.
+
 ## Route B: containers (Apptainer or Singularity)
 
 If Apptainer or Singularity becomes available on the login node and the compute nodes, Nextflow can run on the login node and send every task to SLURM as its own job, each in the pipeline's container image (no environments to create):

@@ -614,14 +614,16 @@ def relevance_figure(rel: dict, caption: dict, prefix: str, set_name: str = "kee
         for r in part.itertuples(index=False):
             ca = VIEW_COLOURS.get(r.view_a, figures.SERIES[0])
             cb = VIEW_COLOURS.get(r.view_b, figures.SERIES[1])
-            rows_b.append({"label": f"{r.view_a} + {r.view_b}",
-                           "segments": [(max(r.unique_a, 0.0), ca), (max(r.shared, 0.0), (190, 190, 190)),
-                                        (max(r.unique_b, 0.0), cb)],
-                           "text": f"only A {r.unique_a:.2f}, both {r.shared:.2f}, only B {r.unique_b:.2f}"})
-        b = figures.hbar_chart(rows_b, "R2 of the expression's components, split", x_range=(0.0, 1.0), width=980)
-        items = [((190, 190, 190), "predicted by both A and B"), ((120, 120, 120), "only A: left colour; only B: right colour")]
-        parts.append(figures.stack([figures.title_strip(980, "b. What each view adds to the other (A + B)", 14), b,
-                                    figures.legend(items, width=980)]))
+            rows_b.append(partition_row(f"A = {r.view_a}, B = {r.view_b}", r.only_a, r.shared, r.only_b, r.r2_joint,
+                                        ca, cb))
+        b = figures.hbar_chart(rows_b, "share of the expression's variance (its components)", x_range=(0.0, 1.0),
+                               width=1180)
+        items = [(SHARED_COLOUR, "shared (both predict it): R2(A) + R2(B) - R2(joint)"),
+                 (NOT_EXPLAINED_COLOUR, "not explained: 1 - R2(joint)"),
+                 ((120, 120, 120), "only A (A's colour): R2(joint) - R2(B); only B (B's colour): R2(joint) - R2(A)")]
+        parts.append(figures.stack([figures.title_strip(1180, "b. What each view adds to the other: joint model = one "
+                                                              "regression on the components of both views", 14), b,
+                                    figures.legend(items, width=1180)]))
     body = figures.stack(parts)
     return figures.with_caption(body, title=(f"How much of the expression the image predicts - {prefix}, set "
                                              f"'{set_name}' ({rel['info']['n_tiles']} tiles)"), min_width=1000,
@@ -682,54 +684,75 @@ def relevance_genes_figure(rel: dict, caption: dict, prefix: str, x_view: str = 
                                 min_width=1200, **caption)
 
 
-PARTITION_COLOURS = {"only_a": (0, 114, 178), "shared": (150, 150, 150), "only_b": (213, 94, 0)}
+SHARED_COLOUR = (150, 150, 150)
+NOT_EXPLAINED_COLOUR = (234, 234, 234)
+
+
+def partition_row(label: str, only_a: float, shared: float, only_b: float, joint: float, colour_a, colour_b,
+                  marker: float = np.nan, extra: str = "") -> dict:
+    """One bar of the whole variance (0 to 1): only A, shared, only B, then not explained (the
+    rest up to 1). Parts below 0 (noise of out-of-sample R^2) are drawn as 0 and written as they
+    are."""
+    seg = [max(only_a, 0.0), max(shared, 0.0), max(only_b, 0.0)]
+    seg = [v if np.isfinite(v) else 0.0 for v in seg]
+    rest = max(0.0, 1.0 - sum(seg))
+    text = (f"joint {joint:.2f} = only A {only_a:.2f} + shared {shared:.2f} + only B {only_b:.3f}; "
+            f"not explained {1 - joint:.2f}" + (f"; {extra}" if extra else ""))
+    return {"label": label, "segments": [(seg[0], colour_a), (seg[1], SHARED_COLOUR), (seg[2], colour_b),
+                                         (rest, NOT_EXPLAINED_COLOUR)], "marker": marker, "text": text}
+
+
+def partition_legend(view_a: str, view_b: str, width: int, marker: str | None = None) -> Image.Image:
+    ca = VIEW_COLOURS.get(view_a, figures.SERIES[0])
+    cb = VIEW_COLOURS.get(view_b, figures.SERIES[1])
+    items = [(ca, f"only A = {view_a}: R2(joint) - R2(B)"), (SHARED_COLOUR, "shared (both predict it): R2(A) + R2(B) - R2(joint)"),
+             (cb, f"only B = {view_b}: R2(joint) - R2(A)"), (NOT_EXPLAINED_COLOUR, "not explained: 1 - R2(joint)")]
+    if marker:
+        items.append(((0, 0, 0), marker))
+    return figures.legend(items, width=width)
 
 
 def gene_partition_figure(gp: pd.DataFrame, caption: dict, prefix: str, view_a: str = "UNI2H_RGB",
                           view_b: str = "LBP_RGB", n_top: int = 25) -> Image.Image | None:
-    """a: for the genes best predicted from both views together, R^2(A+B) split into only A,
-    shared and only B. b: the same parts summed over the genes that beat the spatial null
-    from at least one view."""
+    """a: for the genes best predicted from the joint model, each gene's variance (1, z-scores)
+    split into only A, shared, only B and not explained, with its reliability (black tick: the
+    most its noise allows). b: the same, averaged over all genes and over the well-measured
+    genes."""
+    from .relevance import WELL_MEASURED
+
     if gp is None or gp.empty:
         return None
     t = gp[(gp["view_a"] == view_a) & (gp["view_b"] == view_b)].reset_index(drop=True)
     if t.empty:
         return None
-    ca = VIEW_COLOURS.get(view_a, PARTITION_COLOURS["only_a"])
-    cb = VIEW_COLOURS.get(view_b, PARTITION_COLOURS["only_b"])
-    order = np.argsort(-np.nan_to_num(t["r2_ab"].to_numpy(float), nan=-9))[:n_top]
+    ca = VIEW_COLOURS.get(view_a, figures.SERIES[0])
+    cb = VIEW_COLOURS.get(view_b, figures.SERIES[1])
+    order = np.argsort(-np.nan_to_num(t["r2_joint"].to_numpy(float), nan=-9))[:n_top]
     rows = []
     for i in order:
         r = t.iloc[i]
-        rel = r["reliability"] if np.isfinite(r.get("reliability", np.nan)) else np.nan
-        text = f"A {r['only_a']:.2f} | both {r['shared']:.2f} | B {r['only_b']:.2f}"
-        if np.isfinite(rel):
-            text += f" | reliability {rel:.2f}"
-        rows.append({"label": str(r["gene_name"]),
-                     "segments": [(max(r["only_a"], 0.0), ca), (max(r["shared"], 0.0), PARTITION_COLOURS["shared"]),
-                                  (max(r["only_b"], 0.0), cb)],
-                     "marker": rel, "text": text})
-    top_x = float(np.ceil(max(float(np.nanmax(t["r2_ab"])), 0.2) * 10) / 10)
-    a = figures.hbar_chart(rows, f"R2 of the gene from {view_a} + {view_b}, split (black tick: reliability)",
-                           x_range=(0.0, min(1.0, max(top_x, 0.2))), width=980)
-    sig = (t["q_a"] < 0.05) | (t["q_b"] < 0.05)
-    s = t[sig] if sig.any() else t
-    pos = s[["only_a", "shared", "only_b"]].clip(lower=0).sum()
-    total = float(pos.sum())
-    shares = (pos / total) if total > 0 else pos * np.nan
-    b_rows = [{"label": f"{len(s)} genes", "segments": [(shares["only_a"], ca),
-                                                         (shares["shared"], PARTITION_COLOURS["shared"]),
-                                                         (shares["only_b"], cb)],
-               "text": f"only {view_a} {shares['only_a']:.0%} | both {shares['shared']:.0%} | only {view_b} "
-                       f"{shares['only_b']:.0%}"}]
-    b = figures.hbar_chart(b_rows, "share of the summed R2 (parts below 0 counted as 0)", x_range=(0.0, 1.0), width=980)
-    items = [(ca, f"only {view_a}: R2(A+B) - R2(B)"), (PARTITION_COLOURS["shared"], "both: R2(A) + R2(B) - R2(A+B)"),
-             (cb, f"only {view_b}: R2(A+B) - R2(A)")]
-    which = "that beat the spatial null from at least one view" if sig.any() else "(none beats the null: all genes)"
-    body = figures.stack([figures.title_strip(980, f"a. The {len(order)} genes best predicted from both together", 14), a,
-                          figures.title_strip(980, f"b. Summed over the genes {which}", 14), b,
-                          figures.legend(items, width=980)])
-    return figures.with_caption(body, title=f"What each view predicts of every gene - {prefix}, set 'keep'", min_width=1000,
+        rel = float(r.get("reliability", np.nan))
+        rows.append(partition_row(str(r["gene_name"]), r["only_a"], r["shared"], r["only_b"], r["r2_joint"], ca, cb,
+                                  marker=rel, extra=f"reliability {rel:.2f}" if np.isfinite(rel) else ""))
+    a = figures.hbar_chart(rows, "share of the gene's variance (z-scores: 1 per gene)", x_range=(0.0, 1.0), width=1180)
+    b_rows = []
+    groups = [("all genes", t)]
+    if "reliability" in t and t["reliability"].notna().any():
+        groups.append((f"well measured (reliability >= {WELL_MEASURED:g})", t[t["reliability"] >= WELL_MEASURED]))
+    for name, u in groups:
+        if len(u):
+            m = u[["only_a", "shared", "only_b", "r2_joint"]].mean()
+            rel = float(u["reliability"].mean()) if "reliability" in u else np.nan
+            b_rows.append(partition_row(f"{name}: {len(u)}", m["only_a"], m["shared"], m["only_b"], m["r2_joint"], ca, cb,
+                                        marker=rel, extra=f"mean reliability {rel:.2f}" if np.isfinite(rel) else ""))
+    b = figures.hbar_chart(b_rows, "mean over the genes of the share of the gene's variance", x_range=(0.0, 1.0),
+                           width=1180)
+    body = figures.stack([figures.title_strip(1180, f"a. The {len(order)} genes best predicted by the joint model "
+                                                    f"({view_a} and {view_b} together)", 14), a,
+                          figures.title_strip(1180, "b. Averaged over the genes", 14), b,
+                          partition_legend(view_a, view_b, 1180, "black tick: reliability (the most the gene's noise "
+                                                                 "allows)")])
+    return figures.with_caption(body, title=f"What each view predicts of every gene - {prefix}, set 'keep'", min_width=1200,
                                 **caption)
 
 
@@ -812,8 +835,12 @@ def texture_genes_figure(table: pd.DataFrame, summary: pd.DataFrame, caption: di
     and radius, the number of genes with q < level."""
     if table is None or table.empty:
         return None
-    feats = list(dict.fromkeys(table["feature"]))
-    ft = table.drop_duplicates("feature").set_index("feature").loc[feats]
+    from .texture_genes import TYPES
+
+    ft = table.drop_duplicates("feature")[["feature", "type", "radius_px"]].copy()
+    ft["_t"] = ft["type"].map({t: i for i, t in enumerate(TYPES)}).fillna(len(TYPES))
+    ft = ft.sort_values(["_t", "radius_px"]).set_index("feature")
+    feats = list(ft.index)
     sig = table[table["q"] < level]
     pool = sig if len(sig) else table
     best = pool.assign(a=pool["rho"].abs()).sort_values("a", ascending=False).drop_duplicates("gene_id")
@@ -834,7 +861,7 @@ def texture_genes_figure(table: pd.DataFrame, summary: pd.DataFrame, caption: di
     lw = int(max(text_width(probe, plain(str(name_of[g])), f_lab) for g in rho.index)) + 14
     head = 60
     title_a = "a. Partial Spearman correlation of each gene with each texture feature"
-    W = max(lw + len(feats) * cw + 20, int(text_width(probe, plain(title_a), f_title)) + 20, lw + 560)
+    W = max(lw + len(feats) * cw + 20, int(text_width(probe, plain(title_a), f_title)) + 20, lw + 820)
     H = 30 + head + len(rho) * ch + 40
     img = Image.new("RGB", (W, H), BG)
     draw = ImageDraw.Draw(img)
@@ -865,8 +892,8 @@ def texture_genes_figure(table: pd.DataFrame, summary: pd.DataFrame, caption: di
         v = -top + 2 * top * i / 159
         draw.line([(lw + i, yb), (lw + i, yb + 10)], fill=diverging_colour(v, top))
     draw.text((lw - 40, yb - 2), f"{-top:.2f}", font=f_small, fill=MUTED)
-    draw.text((lw + 166, yb - 2), f"{top:.2f}   rho (columns: radius in px); dot: {dot_label or f'q < {level:g}'}",
-              font=f_small, fill=MUTED)
+    draw.text((lw + 166, yb - 2), f"{top:.2f}   rho (colour saturated at +-{top:.2f}; rho itself ranges from -1 to 1); "
+                                  f"columns: radius in px; dot: {dot_label or f'q < {level:g}'}", font=f_small, fill=MUTED)
     panels = [img]
     if summary is not None and len(summary):
         series = []
